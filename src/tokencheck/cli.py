@@ -268,10 +268,24 @@ def _cmd_usage(args: argparse.Namespace, style: render.Style) -> int:
 
     if provider == "openai":
         key = auth.find_openai_admin_key(getattr(args, "admin_key", None))
-        report = openai_api.fetch_org_usage(key, period=window)
+        warning = auth.key_kind_warning(key, "openai")
+        fetch = lambda: openai_api.fetch_org_usage(key, period=window)  # noqa: E731
     else:
         key = auth.find_admin_key(getattr(args, "admin_key", None))
-        report = api.fetch_admin_usage(key, period=window)
+        warning = auth.key_kind_warning(key, "anthropic")
+        fetch = lambda: api.fetch_admin_usage(key, period=window)  # noqa: E731
+
+    # Say what is wrong with the key *before* the request, so a rejection reads
+    # as "wrong kind of key" rather than "bad key".
+    if warning and not args.json:
+        print(style.yellow(f"warning: {warning}"), file=sys.stderr)
+
+    try:
+        report = fetch()
+    except api.APIError as error:
+        if warning and error.status in (401, 403):
+            raise api.APIError(f"{error}\n{warning}", status=error.status) from error
+        raise
 
     _emit(report, render.render_usage(report, style, show_daily=args.daily), as_json=args.json)
     return EXIT_OK
@@ -377,16 +391,24 @@ _SETUP_STEPS: list[dict[str, Any]] = [
         "method": "admin",
         "name": "Anthropic admin key",
         "unlocks": "tokencheck usage",
-        "fix": "export ANTHROPIC_ADMIN_KEY=sk-ant-admin...",
-        "note": "mint at console.anthropic.com/settings/admin-keys (org owner/admin)",
+        "fix": (
+            'security add-generic-password -a "$USER" -s '
+            f"{auth.ANTHROPIC_ADMIN_KEYCHAIN_SERVICE} -w 'sk-ant-admin...' -A -U"
+        ),
+        "note": "mint at console.anthropic.com/settings/admin-keys (org owner/admin). "
+        "-A lets any app read it without a prompt; $ANTHROPIC_ADMIN_KEY also works",
     },
     {
         "provider": "openai",
         "method": "admin",
         "name": "OpenAI admin key",
         "unlocks": "tokencheck usage -p openai",
-        "fix": "export OPENAI_ADMIN_KEY=sk-admin...",
-        "note": "mint at platform.openai.com/settings/organization/admin-keys",
+        "fix": (
+            'security add-generic-password -a "$USER" -s '
+            f"{auth.OPENAI_ADMIN_KEYCHAIN_SERVICE} -w 'sk-admin...' -A -U"
+        ),
+        "note": "mint at platform.openai.com/settings/organization/admin-keys. "
+        "-A lets any app read it without a prompt; $OPENAI_ADMIN_KEY also works",
     },
 ]
 
@@ -398,20 +420,28 @@ def _setup_report() -> dict[str, Any]:
     # `valid` rather than `available` is what makes the advice actionable.
     usable: dict[tuple[str, str], bool] = {}
     present: dict[tuple[str, str], bool] = {}
+    blocked: dict[tuple[str, str], str] = {}
     for row in rows:
         key = (str(row["provider"]), str(row["method"]))
         usable[key] = usable.get(key, False) or bool(row.get("valid"))
         present[key] = present.get(key, False) or bool(row["available"])
+        # A stored-but-unreadable key is neither "done" nor "missing" — the fix
+        # is a Keychain ACL change, not minting a new key.
+        if "approval pending" in str(row.get("detail", "")):
+            blocked[key] = str(row["detail"])
 
     steps = []
     for step in _SETUP_STEPS:
         key = (step["provider"], step.get("method", "oauth"))
+        is_blocked = key in blocked and not usable.get(key, False)
         steps.append(
             {
                 **step,
                 "method": key[1],
                 "done": usable.get(key, False),
                 "expired": present.get(key, False) and not usable.get(key, False),
+                "blocked": is_blocked,
+                "status_detail": blocked.get(key) if is_blocked else None,
             }
         )
 

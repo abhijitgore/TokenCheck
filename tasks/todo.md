@@ -232,3 +232,44 @@ Gemini correctly reported expired), `setup` (2 of 5 configured, `!` on Gemini),
 `limits -p all` with the new styling. `--no-color` emits zero ANSI escapes and
 `--json` remains structurally unchanged; both pinned by test, as is the absence
 of any JWT in output.
+
+---
+
+# Round 5 — admin keys from the macOS Keychain
+
+- [x] `find_admin_key` / `find_openai_admin_key` fall back to Keychain items
+      `anthropic_admin_key` / `openai_admin_key` after flag and env
+- [x] `auth`, `setup` and the error messages name the Keychain source
+- [x] Key-kind prefix warning before the request
+- [x] Blocked-Keychain state reported distinctly from missing
+
+## Decisions worth recording
+
+**Blocked ≠ missing.** An item stored without `-A` trusts only its creating
+process, so reads from another program raise a macOS approval dialog that a
+non-interactive run never answers — the call hangs, then fails. Reporting that
+as "not set" sends you looking for a key you already stored, so
+`keychain_secret` raises `KeychainBlocked` on timeout and the inventory says
+"stored, but Keychain approval pending" with the `-A` fix.
+
+**8-second timeout.** The old 20s meant a blocked read hung the command; 8s is
+long enough for a slow Keychain and short enough to fail usefully.
+
+**`keychain_secret` is memoized.** Without it the suite went from 0.15s to 112s
+once real blocked items existed — several commands ask for the same key more
+than once. Tests additionally stub it out entirely: a suite whose runtime
+depends on Keychain ACLs is a suite that will hang on someone else's machine.
+
+**Key-kind warning is prefix-based and conservative.** `sk-ant-api…`/`sk-proj…`
+are flagged as the wrong kind; an unrecognised prefix is *not* flagged, so a
+future key format is not reported as broken merely for being unfamiliar.
+
+## Review
+
+102 tests pass in 0.15s. Live-verified: `setup` reports both admin keys as
+"stored, but Keychain approval pending" with the `-A` fix; `-A` storage
+confirmed readable from a separate process by round-trip probe.
+
+Still unverified live: both admin usage paths. The keys now in the Keychain are
+`sk-ant-api03…` and `sk-proj-…` — ordinary API keys, not admin keys — so they
+cannot authorize the usage endpoints regardless of the Keychain issue.

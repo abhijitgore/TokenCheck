@@ -143,6 +143,37 @@ What each provider reports:
 | Cost | ✓ admin key | ✓ admin key | **not offered** |
 | Cache-write tokens | ✓ | not reported by the API | — |
 
+## Storing admin keys so they survive a reboot
+
+Put them in the macOS Keychain rather than a shell rc file — a key in `.zshrc`
+gets committed if your dotfiles are version-controlled, and an exported key sits
+in the environment of every process you launch.
+
+```bash
+security add-generic-password -a "$USER" -s anthropic_admin_key -w 'sk-ant-admin...' -A -U
+security add-generic-password -a "$USER" -s openai_admin_key    -w 'sk-admin...'     -A -U
+```
+
+TokenCheck reads these directly — no shell configuration, no env var.
+
+**`-A` matters.** Without it the item's access control trusts only the process
+that created it, so every read from another program raises a macOS approval
+dialog. A non-interactive run will never answer that dialog, so the read hangs
+and then fails. TokenCheck reports this case as "stored, but Keychain approval
+pending" rather than "not set", because the two need completely different
+fixes. `-U` updates in place, so re-running the command rotates a key.
+
+To keep the key out of `~/.zsh_history`, let zsh read it silently:
+
+```bash
+read -rs "k?Admin key: " && security add-generic-password -a "$USER" -s anthropic_admin_key -w "$k" -A -U && unset k
+```
+
+TokenCheck also checks the key's prefix and warns *before* the request when you
+have stored an ordinary API key (`sk-ant-api…`, `sk-proj…`) rather than an admin
+key — those are rejected with a bare 401 that otherwise reads like a bad key
+rather than the wrong kind of key.
+
 ## Setting up a machine
 
 `tokencheck setup` (or `tokencheck --setup`) inspects what is already
@@ -266,7 +297,8 @@ holding. If the token has expired, TokenCheck says so and asks you to run
 `claude`.
 
 **Admin API key.** Resolved from `--admin-key`, then `$ANTHROPIC_ADMIN_KEY`,
-then `$ANTHROPIC_ADMIN_API_KEY`. This must be an admin key (`sk-ant-admin…`)
+then `$ANTHROPIC_ADMIN_API_KEY`, then the macOS Keychain item
+`anthropic_admin_key`. This must be an admin key (`sk-ant-admin…`)
 from <https://console.anthropic.com/settings/admin-keys> — a regular API key
 will not authorize the Usage & Cost API. Org owner or admin role required.
 
@@ -274,7 +306,8 @@ will not authorize the Usage & Cost API. Org owner or admin role required.
 `~/.codex/auth.json` (`$CODEX_HOME` respected); re-auth is `codex login`. The
 usage path needs an admin key (`sk-admin…`) from
 <https://platform.openai.com/settings/organization/admin-keys>, resolved from
-`--admin-key`, then `$OPENAI_ADMIN_KEY`, then `$OPENAI_API_KEY`.
+`--admin-key`, then `$OPENAI_ADMIN_KEY`, then `$OPENAI_API_KEY`, then the
+Keychain item `openai_admin_key`.
 
 **Gemini.** Reads `~/.gemini/oauth_creds.json` (`$GEMINI_CONFIG_DIR`
 respected), written when you sign in with the Gemini CLI or Antigravity.

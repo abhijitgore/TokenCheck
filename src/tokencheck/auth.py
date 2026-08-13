@@ -17,6 +17,7 @@ the session Claude Code itself is holding.
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import os
 import subprocess
@@ -110,6 +111,82 @@ def _from_env() -> OAuthCredential | None:
     return OAuthCredential(access_token=token, source=f"${OAUTH_TOKEN_ENV}")
 
 
+#: Prefixes that distinguish an org admin key from an ordinary API key. The
+#: usage endpoints reject the latter with a bare 401, which reads like a bad
+#: credential rather than the wrong *kind* of credential — so name the mismatch.
+KEY_PREFIXES = {
+    "anthropic": {"admin": "sk-ant-admin", "regular": "sk-ant-api"},
+    "openai": {"admin": "sk-admin", "regular": "sk-proj"},
+}
+
+
+def key_kind_warning(key: str, vendor: str) -> str | None:
+    """Warn when a key is clearly not the admin kind. None when it looks right."""
+    prefixes = KEY_PREFIXES.get(vendor)
+    if not prefixes or not key:
+        return None
+    if key.startswith(prefixes["admin"]):
+        return None
+    if key.startswith(prefixes["regular"]):
+        return (
+            f"This looks like a regular API key (`{prefixes['regular']}…`), not an "
+            f"admin key (`{prefixes['admin']}…`). The usage endpoints will reject it."
+        )
+    return None
+
+
+#: Keychain services TokenCheck looks in for admin keys, so they survive a
+#: reboot without living in a shell rc file (which is often under version
+#: control) or in the environment of every process you launch.
+ANTHROPIC_ADMIN_KEYCHAIN_SERVICE = "anthropic_admin_key"
+OPENAI_ADMIN_KEYCHAIN_SERVICE = "openai_admin_key"
+
+
+#: Long enough for a slow Keychain, short enough that a blocking GUI prompt is
+#: reported rather than hanging the command.
+KEYCHAIN_TIMEOUT = 8
+
+
+class KeychainBlocked(AuthError):
+    """The item exists but macOS is gating it behind an approval dialog."""
+
+
+@functools.lru_cache(maxsize=None)
+def keychain_secret(service: str) -> str | None:
+    """Read a generic-password item from the macOS login Keychain.
+
+    Cached for the life of the process: several commands ask for the same key
+    more than once, and each miss can cost a Keychain round-trip. A key rotated
+    mid-run is therefore not picked up — fine for a short-lived CLI.
+
+    A missing item and a non-macOS host both mean "no secret" and return None.
+    A *blocked* read is different and raises: the item is there, but its access
+    control only trusts the process that created it, so macOS puts up an
+    approval dialog that a non-interactive run will never answer. Reporting
+    that as "not set" would send you looking for a key you already stored.
+    """
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", service, "-w"],
+            capture_output=True,
+            text=True,
+            timeout=KEYCHAIN_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise KeychainBlocked(
+            f"Keychain item `{service}` exists but is waiting on an approval dialog.\n"
+            "  Check for a macOS prompt on screen, then re-store the item so any\n"
+            "  application can read it without prompting:\n"
+            f"    security add-generic-password -a \"$USER\" -s {service} -w 'KEY' -A -U"
+        ) from error
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    secret = result.stdout.strip()
+    return secret or None
+
+
 def _from_keychain() -> OAuthCredential | None:
     """Read the Claude Code credential from the macOS login Keychain.
 
@@ -167,20 +244,25 @@ def find_oauth_credential() -> OAuthCredential:
 
 
 def find_admin_key(explicit: str | None = None) -> str:
-    """Resolve an Anthropic Admin API key."""
+    """Resolve an Anthropic Admin API key: flag, then env, then Keychain."""
     if explicit and explicit.strip():
         return explicit.strip()
     for name in ADMIN_KEY_ENVS:
         value = os.environ.get(name, "").strip()
         if value:
             return value
+    secret = keychain_secret(ANTHROPIC_ADMIN_KEYCHAIN_SERVICE)
+    if secret:
+        return secret
     raise AuthError(
         "No Anthropic Admin API key found.\n"
-        f"  Searched: --admin-key, {', '.join('$' + n for n in ADMIN_KEY_ENVS)}\n"
+        f"  Searched: --admin-key, {', '.join('$' + n for n in ADMIN_KEY_ENVS)}, "
+        f"macOS Keychain ({ANTHROPIC_ADMIN_KEYCHAIN_SERVICE})\n"
         "  The Usage & Cost API needs an admin key (starts with `sk-ant-admin`), "
         "not a regular API key.\n"
         "  Mint one at https://console.anthropic.com/settings/admin-keys "
-        "(org owner/admin only)."
+        "(org owner/admin only), then store it so it survives a reboot:\n"
+        f"    security add-generic-password -a \"$USER\" -s {ANTHROPIC_ADMIN_KEYCHAIN_SERVICE} -w 'sk-ant-admin...' -U"
     )
 
 
@@ -308,17 +390,24 @@ def find_codex_credential() -> CodexCredential:
 
 
 def find_openai_admin_key(explicit: str | None = None) -> str:
+    """Resolve an OpenAI admin key: flag, then env, then Keychain."""
     if explicit and explicit.strip():
         return explicit.strip()
     for name in OPENAI_ADMIN_KEY_ENVS:
         value = os.environ.get(name, "").strip()
         if value:
             return value
+    secret = keychain_secret(OPENAI_ADMIN_KEYCHAIN_SERVICE)
+    if secret:
+        return secret
     raise AuthError(
         "No OpenAI admin key found.\n"
-        f"  Searched: --admin-key, {', '.join('$' + n for n in OPENAI_ADMIN_KEY_ENVS)}\n"
+        f"  Searched: --admin-key, {', '.join('$' + n for n in OPENAI_ADMIN_KEY_ENVS)}, "
+        f"macOS Keychain ({OPENAI_ADMIN_KEYCHAIN_SERVICE})\n"
         "  The Usage API needs an admin key (starts with `sk-admin`), not a project key.\n"
-        "  Mint one at https://platform.openai.com/settings/organization/admin-keys."
+        "  Mint one at https://platform.openai.com/settings/organization/admin-keys, "
+        "then store it so it survives a reboot:\n"
+        f"    security add-generic-password -a \"$USER\" -s {OPENAI_ADMIN_KEYCHAIN_SERVICE} -w 'sk-admin...' -U"
     )
 
 
@@ -458,15 +547,20 @@ def describe_sources(
         )
 
     try:
-        find_admin_key(explicit_admin_key)
-        admin_available, admin_detail = True, "set"
+        key = find_admin_key(explicit_admin_key)
+        admin_available = True
+        admin_detail = key_kind_warning(key, "anthropic") or "set"
+    except KeychainBlocked:
+        admin_available, admin_detail = False, "stored, but Keychain approval pending"
     except AuthError:
         admin_available, admin_detail = False, "not set"
     rows.append(
         {
             "provider": "claude",
             "method": "admin",
-            "source": "--admin-key / $" + " / $".join(ADMIN_KEY_ENVS),
+            "source": "--admin-key / $"
+            + " / $".join(ADMIN_KEY_ENVS)
+            + f" / Keychain ({ANTHROPIC_ADMIN_KEYCHAIN_SERVICE})",
             "available": admin_available,
             "valid": admin_available,
             "detail": admin_detail,
@@ -477,15 +571,20 @@ def describe_sources(
     rows.append(_credential_row("openai", str(codex_auth_file()), codex, "run `codex login`"))
 
     try:
-        find_openai_admin_key(explicit_openai_key)
-        openai_available, openai_detail = True, "set"
+        key = find_openai_admin_key(explicit_openai_key)
+        openai_available = True
+        openai_detail = key_kind_warning(key, "openai") or "set"
+    except KeychainBlocked:
+        openai_available, openai_detail = False, "stored, but Keychain approval pending"
     except AuthError:
         openai_available, openai_detail = False, "not set"
     rows.append(
         {
             "provider": "openai",
             "method": "admin",
-            "source": "--admin-key / $" + " / $".join(OPENAI_ADMIN_KEY_ENVS),
+            "source": "--admin-key / $"
+            + " / $".join(OPENAI_ADMIN_KEY_ENVS)
+            + f" / Keychain ({OPENAI_ADMIN_KEYCHAIN_SERVICE})",
             "available": openai_available,
             "valid": openai_available,
             "detail": openai_detail,

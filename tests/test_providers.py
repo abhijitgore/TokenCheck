@@ -11,11 +11,27 @@ import datetime as dt
 import json
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from tokencheck import auth, gemini_api, openai_api, period, render  # noqa: E402
+
+
+def setUpModule():
+    """Never touch the real Keychain from tests.
+
+    Reads can block on a macOS approval dialog, which turns a fast suite into a
+    multi-minute one and makes results depend on machine state.
+    """
+    auth.keychain_secret.cache_clear()
+    unittest.mock.patch.object(auth, "keychain_secret", lambda service: None).start()
+
+
+def tearDownModule():
+    unittest.mock.patch.stopall()
+    auth.keychain_secret.cache_clear()
 
 
 class PeriodParsing(unittest.TestCase):
@@ -407,3 +423,77 @@ class BarRendering(unittest.TestCase):
         lines = render.section("Title", render.Style(False))
         self.assertEqual(lines[0], "Title")
         self.assertTrue(set(lines[1]) == {"─"})
+
+
+class KeychainAdminKeys(unittest.TestCase):
+    def setUp(self):
+        for name in (*auth.ADMIN_KEY_ENVS, *auth.OPENAI_ADMIN_KEY_ENVS):
+            self.addCleanup(unittest.mock.patch.dict("os.environ", {}, clear=False).stop)
+        self.env = unittest.mock.patch.dict(
+            "os.environ",
+            {k: "" for k in (*auth.ADMIN_KEY_ENVS, *auth.OPENAI_ADMIN_KEY_ENVS)},
+        )
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def _with_keychain(self, mapping):
+        patcher = unittest.mock.patch.object(
+            auth, "keychain_secret", lambda service: mapping.get(service)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_keychain_supplies_anthropic_key(self):
+        self._with_keychain({auth.ANTHROPIC_ADMIN_KEYCHAIN_SERVICE: "sk-ant-admin-xyz"})
+        self.assertEqual(auth.find_admin_key(), "sk-ant-admin-xyz")
+
+    def test_keychain_supplies_openai_key(self):
+        self._with_keychain({auth.OPENAI_ADMIN_KEYCHAIN_SERVICE: "sk-admin-xyz"})
+        self.assertEqual(auth.find_openai_admin_key(), "sk-admin-xyz")
+
+    def test_explicit_flag_beats_keychain(self):
+        self._with_keychain({auth.ANTHROPIC_ADMIN_KEYCHAIN_SERVICE: "from-keychain"})
+        self.assertEqual(auth.find_admin_key("from-flag"), "from-flag")
+
+    def test_env_beats_keychain(self):
+        self._with_keychain({auth.ANTHROPIC_ADMIN_KEYCHAIN_SERVICE: "from-keychain"})
+        with unittest.mock.patch.dict("os.environ", {auth.ADMIN_KEY_ENVS[0]: "from-env"}):
+            self.assertEqual(auth.find_admin_key(), "from-env")
+
+    def test_missing_everywhere_names_the_keychain_service(self):
+        self._with_keychain({})
+        with self.assertRaises(auth.AuthError) as caught:
+            auth.find_admin_key()
+        self.assertIn(auth.ANTHROPIC_ADMIN_KEYCHAIN_SERVICE, str(caught.exception))
+
+    def test_blocked_keychain_is_distinct_from_missing(self):
+        def blocked(service):
+            raise auth.KeychainBlocked("approval pending")
+
+        patcher = unittest.mock.patch.object(auth, "keychain_secret", blocked)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with self.assertRaises(auth.KeychainBlocked):
+            auth.find_admin_key()
+        # An inventory must still render rather than propagating the block.
+        rows = [r for r in auth.describe_sources() if r["method"] == "admin"]
+        self.assertTrue(any("approval pending" in str(r["detail"]) for r in rows))
+
+
+class KeyKindWarning(unittest.TestCase):
+    def test_regular_anthropic_key_is_flagged(self):
+        warning = auth.key_kind_warning("sk-ant-api03-abc", "anthropic")
+        self.assertIn("sk-ant-admin", warning)
+
+    def test_project_openai_key_is_flagged(self):
+        self.assertIn("sk-admin", auth.key_kind_warning("sk-proj-abc", "openai"))
+
+    def test_admin_keys_pass_silently(self):
+        self.assertIsNone(auth.key_kind_warning("sk-ant-admin01-abc", "anthropic"))
+        self.assertIsNone(auth.key_kind_warning("sk-admin-abc", "openai"))
+
+    def test_unknown_shapes_are_not_guessed(self):
+        # A future prefix should not be reported as wrong just for being unfamiliar.
+        self.assertIsNone(auth.key_kind_warning("something-else", "anthropic"))
+        self.assertIsNone(auth.key_kind_warning("", "anthropic"))
+        self.assertIsNone(auth.key_kind_warning("sk-ant-api03", "unknown-vendor"))

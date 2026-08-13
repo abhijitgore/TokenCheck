@@ -443,10 +443,16 @@ def render_setup(report: dict[str, Any], style: Style) -> str:
 
     width = max((len(s["name"]) for s in steps), default=0)
     for step in steps:
-        # An expired credential is distinct from a missing one: the setup work
-        # is done, it just needs renewing.
-        mark = style.yellow("!") if step.get("expired") else style.status(step["done"])
-        detail = "signed in but expired" if step.get("expired") else step["unlocks"]
+        # Expired or blocked is distinct from missing: the credential exists,
+        # so the fix is renewing or unlocking it, not creating a new one.
+        needs_attention = step.get("expired") or step.get("blocked")
+        mark = style.yellow("!") if needs_attention else style.status(step["done"])
+        if step.get("blocked"):
+            detail = "stored, but Keychain approval pending"
+        elif step.get("expired"):
+            detail = "signed in but expired"
+        else:
+            detail = step["unlocks"]
         lines.append(f"  {mark} {step['name'].ljust(width)}   {style.dim(detail)}")
 
     if todo:
@@ -454,8 +460,17 @@ def render_setup(report: dict[str, Any], style: Style) -> str:
         lines.extend(section("To finish", style))
         for step in todo:
             lines.append("")
-            label = f"{step['name']} (expired)" if step.get("expired") else step["name"]
-            lines.append(f"  {label}")
+            suffix = ""
+            if step.get("blocked"):
+                suffix = " (stored, needs Keychain approval)"
+            elif step.get("expired"):
+                suffix = " (expired)"
+            lines.append(f"  {step['name']}{suffix}")
+            if step.get("blocked"):
+                lines.append(
+                    style.dim("      Dismiss the macOS prompt, then re-store with -A so any")
+                )
+                lines.append(style.dim("      app can read it without prompting:"))
             lines.append(f"      {style.bold(step['fix'])}")
             if step.get("note"):
                 lines.append(f"      {style.dim(step['note'])}")
