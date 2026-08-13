@@ -334,3 +334,25 @@ Consequences:
 
 Remaining: the Anthropic key is still Keychain-blocked, so
 `usage --provider claude` is the one path never exercised against a live server.
+
+## Round 5e — verification status of the two admin paths, precisely
+
+Both Keychain items are readable now; both still hold ordinary API keys
+(`sk-ant-api03…`, `sk-proj…`), so neither usage report has returned data. What
+each rejection *does* prove differs, and the difference matters:
+
+**OpenAI — request shape validated.** 403 `Missing scopes: api.usage.read`. A
+403 means the endpoint accepted the request and refused it on permissions, so
+the parameters are confirmed well-formed against the live server.
+
+**Anthropic — request shape still unvalidated.** Bare 401 `invalid x-api-key`,
+no detail. Probed deliberately: a request with `bucket_width=99x`, and a request
+with *no query string at all*, both return the identical 401. Anthropic
+authenticates before it validates parameters, so the 401 carries no information
+about whether `starting_at`/`ending_at`/`bucket_width`/`limit`/`group_by[]` are
+right.
+
+So `usage --provider claude` is the one path in TokenCheck that has never had a
+meaningful live response, and no amount of probing with a non-admin key can
+change that — it needs a real `sk-ant-admin…` key. Everything else in the tool
+has now been exercised against a real server.
