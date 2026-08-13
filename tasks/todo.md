@@ -392,3 +392,46 @@ Changes:
 - `setup` now prints the inventory's own reason string rather than inferring
   one, which had produced "signed in but expired" for a wrong-kind key.
 - OpenAI hint names the `api.usage.read` scope route, per its own 403.
+
+---
+
+# Round 6 — account-type gates
+
+- [x] `account.py` classifies individual vs organization from `~/.claude.json`
+      (`organizationType`, `seatTier`, `billingType`)
+- [x] Gate 1: an organization account exits 0 from any command with a notice
+- [x] Gate 2: `usage` on an individual account exits 0 rather than 401-ing
+- [x] `TOKENCHECK_SKIP_ACCOUNT_CHECK=1` overrides gate 1
+
+## Decisions worth recording
+
+**Both gates fail open.** An unrecognised account classifies as `unknown`, which
+is neither individual nor organization, so neither gate fires. A wrong guess
+about account type must never make the tool unusable — that is a worse failure
+than either gate not firing.
+
+**`unknown` is not "individual".** Tempting to default, but then a future plan
+string would silently gate `usage`. `is_individual` and `is_organization` are
+both False for unknown, and each gate tests the one it needs.
+
+**Gate 1 has an override, gate 2 does not.** Gate 1 blocks the whole tool on a
+heuristic, so it needs an escape hatch. Gate 2 only skips a command that is
+provably impossible on that account — there is nothing to escape to.
+
+**Individual plans still have an "organization".** This account's is
+"abhijitgore@gmail.com's Organization" with role `admin`, which is why the
+presence of an org proves nothing; `organizationType` is the signal that
+separates `claude_max` from `claude_team`.
+
+**Config path gotcha:** `claudeconfig.config_file()` resolves to `<dir>.json`
+*beside* the config directory (`~/.claude` → `~/.claude.json`), not inside it.
+The first end-to-end test of gate 1 wrote the fixture inside the directory,
+silently read the real config, and appeared to show the gate failing.
+
+## Review
+
+120 tests pass. Live-verified on the real account: `usage` exits 0 with the
+individual notice; `limits`/`local`/`whoami` unaffected. Gate 1 verified against
+a synthetic `claude_team` config — notice on every command, exit 0, correct
+`--json` shape (`{"skipped": "organization-account", ...}`), and the override
+env var runs the tool normally.

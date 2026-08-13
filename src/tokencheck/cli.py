@@ -10,6 +10,7 @@ from typing import Any
 
 from . import (
     __version__,
+    account,
     api,
     auth,
     claudeconfig,
@@ -282,6 +283,19 @@ def _cmd_limits(args: argparse.Namespace, style: render.Style) -> int:
 def _cmd_usage(args: argparse.Namespace, style: render.Style) -> int:
     window = period.from_args(getattr(args, "period", None), getattr(args, "days", None))
     provider = getattr(args, "provider", "claude")
+
+    # Anthropic's Admin API is unavailable for individual accounts, so this can
+    # only fail — say why and point at the commands that do cover this account,
+    # rather than making a request that is guaranteed to 401.
+    if provider == "claude":
+        who = account.classify()
+        if who.is_individual and not account.override_active():
+            _emit(
+                {"skipped": "admin-api-unavailable-for-individual-accounts", "account": who.kind},
+                style.yellow(account.individual_usage_notice(who)),
+                as_json=args.json,
+            )
+            return EXIT_OK
 
     if provider == "openai":
         key = auth.find_openai_admin_key(getattr(args, "admin_key", None))
@@ -635,6 +649,19 @@ def main(argv: list[str] | None = None) -> int:
         args = parser.parse_args([*[a for a in argv if a != "--setup"], command])
 
     style = render.Style(enabled=not args.no_color and render._color_enabled())
+
+    # TokenCheck reads one personal subscription; an organization's usage lives
+    # in the Admin/Analytics APIs instead. Fails open on an unrecognised
+    # account, so a misread never makes the tool unusable.
+    if not account.override_active():
+        who = account.classify()
+        if who.is_organization:
+            _emit(
+                {"skipped": "organization-account", "account": who.kind, "reason": who.reason},
+                style.yellow(account.organization_notice(who)),
+                as_json=getattr(args, "json", False),
+            )
+            return EXIT_OK
 
     try:
         return _COMMANDS[command](args, style)

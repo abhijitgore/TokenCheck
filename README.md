@@ -146,6 +146,24 @@ What each provider reports:
 | Cost | ✓ admin key | ✓ admin key | **not offered** |
 | Cache-write tokens | ✓ | not reported by the API | — |
 
+## Account type
+
+TokenCheck is built for **individual** Claude subscriptions: it reads the OAuth
+rate-limit windows behind a personal plan and the transcripts on this machine.
+
+- On a **Team or Enterprise** account it prints a short notice and exits 0
+  without running. Organization-wide usage is a different reporting problem,
+  answered by Anthropic's Admin and Analytics APIs, which aggregate across
+  members. Set `TOKENCHECK_SKIP_ACCOUNT_CHECK=1` to run anyway.
+- On an **individual** account, `tokencheck usage` exits gracefully rather than
+  making a request that cannot succeed — the Admin API is unavailable for
+  individual accounts, and subscription usage is not API-billed regardless.
+  `limits` and `local` cover that account's usage.
+
+Classification reads `organizationType`, `seatTier` and `billingType` from
+`~/.claude.json`, and **fails open**: an unrecognised account is `unknown` and
+nothing is gated, so a misread can never make the tool unusable.
+
 ## Storing admin keys so they survive a reboot
 
 Put them in the macOS Keychain rather than a shell rc file — a key in `.zshrc`

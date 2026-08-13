@@ -576,3 +576,86 @@ class ExpiryReporting(unittest.TestCase):
             "expiry_warning": "credential expires in 3m — run `gemini`",
         }
         self.assertIn("expires in 3m", render.render_limits(report, render.Style(False)))
+
+
+class AccountClassification(unittest.TestCase):
+    def _classify(self, oauth):
+        import json as _json
+        import tempfile
+        from tokencheck import account
+
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+            _json.dump({"oauthAccount": oauth}, handle)
+            path = Path(handle.name)
+        self.addCleanup(path.unlink)
+        return account.classify(path)
+
+    def test_individual_plans(self):
+        from tokencheck import account
+
+        for plan in ("claude_max", "claude_pro", "claude_free"):
+            self.assertEqual(self._classify({"organizationType": plan}).kind, account.INDIVIDUAL, plan)
+
+    def test_team_and_enterprise(self):
+        from tokencheck import account
+
+        for plan in ("claude_team", "claude_enterprise", "some_business_tier"):
+            self.assertEqual(self._classify({"organizationType": plan}).kind, account.ORGANIZATION, plan)
+
+    def test_seat_tier_implies_organization(self):
+        from tokencheck import account
+
+        # Individual plans leave seatTier null; a seat is a per-member concept.
+        found = self._classify({"organizationType": "claude_max", "seatTier": "standard"})
+        self.assertEqual(found.kind, account.ORGANIZATION)
+        self.assertIn("seat", found.reason)
+
+    def test_invoice_billing_implies_organization(self):
+        from tokencheck import account
+
+        self.assertEqual(
+            self._classify({"organizationType": "claude_max", "billingType": "invoice"}).kind,
+            account.ORGANIZATION,
+        )
+
+    def test_fails_open_on_missing_or_unfamiliar_signals(self):
+        from tokencheck import account
+
+        # A misread must never block the tool, so anything unrecognised is
+        # `unknown` — and `unknown` is neither gated nor treated as individual.
+        for oauth in ({}, {"organizationType": "claude_plan_from_the_future"}, {"seatTier": None}):
+            found = self._classify(oauth)
+            self.assertEqual(found.kind, account.UNKNOWN, oauth)
+            self.assertFalse(found.is_organization)
+            self.assertFalse(found.is_individual)
+
+    def test_null_seat_tier_is_not_an_organization(self):
+        from tokencheck import account
+
+        self.assertEqual(
+            self._classify({"organizationType": "claude_max", "seatTier": None}).kind,
+            account.INDIVIDUAL,
+        )
+
+    def test_override_env(self):
+        from tokencheck import account
+
+        self.assertFalse(account.override_active({}))
+        self.assertFalse(account.override_active({account.OVERRIDE_ENV: "  "}))
+        self.assertTrue(account.override_active({account.OVERRIDE_ENV: "1"}))
+
+    def test_notices_name_the_reason_and_the_way_out(self):
+        from tokencheck import account
+
+        org = self._classify({"organizationType": "claude_team", "organizationName": "Acme"})
+        notice = account.organization_notice(org)
+        self.assertIn("Acme", notice)
+        self.assertIn("claude_team", notice)
+        self.assertIn(account.OVERRIDE_ENV, notice)
+
+        individual = self._classify({"organizationType": "claude_max"})
+        usage_notice = account.individual_usage_notice(individual)
+        self.assertIn("unavailable for", usage_notice)
+        # and points at the commands that do work on this account
+        self.assertIn("tokencheck limits", usage_notice)
+        self.assertIn("tokencheck local", usage_notice)
