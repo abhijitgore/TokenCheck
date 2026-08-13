@@ -168,8 +168,17 @@ def expires_in_phrase(seconds: float | None) -> str:
 
 
 def rotate_command(service: str, placeholder: str) -> str:
-    """The command that replaces a stored key in place."""
-    return f"security add-generic-password -a \"$USER\" -s {service} -w '{placeholder}' -A -U"
+    """The command that replaces a stored key, ACL included.
+
+    `-U` updates an existing item's *value* but keeps its original access
+    control, so adding `-A` to an update is silently ineffective — an item first
+    created without `-A` keeps prompting forever. Deleting first is what makes
+    the new ACL take effect.
+    """
+    return (
+        f"security delete-generic-password -s {service} 2>/dev/null; "
+        f"security add-generic-password -a \"$USER\" -s {service} -w '{placeholder}' -A"
+    )
 
 
 @functools.lru_cache(maxsize=None)
@@ -196,9 +205,10 @@ def keychain_secret(service: str) -> str | None:
     except subprocess.TimeoutExpired as error:
         raise KeychainBlocked(
             f"Keychain item `{service}` exists but is waiting on an approval dialog.\n"
-            "  Check for a macOS prompt on screen, then re-store the item so any\n"
-            "  application can read it without prompting:\n"
-            f"    security add-generic-password -a \"$USER\" -s {service} -w 'KEY' -A -U"
+            "  Its access control only trusts the process that created it. Note that\n"
+            "  `-U` updates the value but keeps the old ACL, so the item must be\n"
+            "  deleted and re-added for `-A` to take effect:\n"
+            f"    {rotate_command(service, 'KEY')}"
         ) from error
     except (OSError, subprocess.SubprocessError):
         return None

@@ -408,24 +408,18 @@ _SETUP_STEPS: list[dict[str, Any]] = [
         "method": "admin",
         "name": "Anthropic admin key",
         "unlocks": "tokencheck usage",
-        "fix": (
-            'security add-generic-password -a "$USER" -s '
-            f"{auth.ANTHROPIC_ADMIN_KEYCHAIN_SERVICE} -w 'sk-ant-admin...' -A -U"
-        ),
+        "fix": auth.rotate_command(auth.ANTHROPIC_ADMIN_KEYCHAIN_SERVICE, "sk-ant-admin..."),
         "note": "mint at console.anthropic.com/settings/admin-keys (org owner/admin). "
-        "-A lets any app read it without a prompt; $ANTHROPIC_ADMIN_KEY also works",
+        "deleting first is required: -U keeps the old ACL. $ANTHROPIC_ADMIN_KEY also works",
     },
     {
         "provider": "openai",
         "method": "admin",
         "name": "OpenAI admin key",
         "unlocks": "tokencheck usage -p openai",
-        "fix": (
-            'security add-generic-password -a "$USER" -s '
-            f"{auth.OPENAI_ADMIN_KEYCHAIN_SERVICE} -w 'sk-admin...' -A -U"
-        ),
+        "fix": auth.rotate_command(auth.OPENAI_ADMIN_KEYCHAIN_SERVICE, "sk-admin..."),
         "note": "mint at platform.openai.com/settings/organization/admin-keys. "
-        "-A lets any app read it without a prompt; $OPENAI_ADMIN_KEY also works",
+        "deleting first is required: -U keeps the old ACL. $OPENAI_ADMIN_KEY also works",
     },
 ]
 

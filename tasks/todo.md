@@ -290,3 +290,21 @@ expired from revoked from wrong-kind, so one message covers all three.
 **Already-expired is not a soft warning.** `_expiry_warning` returns None for a
 credential in the past: that path is a hard error, and emitting both would
 double-report it.
+
+## Round 5c — the `-U` ACL trap
+
+**`security add-generic-password -U` updates an item's value but keeps its
+original access control.** So re-storing an item with `-A -U` does *not* make it
+readable — an item first created without `-A` keeps prompting forever, however
+many times you add `-A` to an update.
+
+Verified directly: created an item *with* `-A`, updated it *without* `-A`, and a
+separate process still read it instantly — the ACL survived the update, and only
+the value changed.
+
+The guidance TokenCheck printed was therefore wrong and has been corrected
+everywhere (`rotate_command`, both admin-key hints, the setup steps) to delete
+the item before re-adding:
+
+    security delete-generic-password -s SERVICE 2>/dev/null; \
+      security add-generic-password -a "$USER" -s SERVICE -w 'KEY' -A

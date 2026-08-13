@@ -35,7 +35,8 @@ ADMIN_KEY_HINT = (
     "The key was rejected. It is expired, revoked, or not an admin key.\n"
     "  Mint a fresh one at https://platform.openai.com/settings/organization/admin-keys "
     "(it must start with `sk-admin`, not `sk-proj`), then replace the stored copy:\n"
-    "    security add-generic-password -a \"$USER\" -s openai_admin_key -w 'sk-admin...' -A -U"
+    "    security delete-generic-password -s openai_admin_key 2>/dev/null; "
+    "security add-generic-password -a \"$USER\" -s openai_admin_key -w 'sk-admin...' -A"
 )
 
 #: `/v1/organization/costs` only buckets by day, unlike the usage endpoint.
