@@ -308,3 +308,29 @@ the item before re-adding:
 
     security delete-generic-password -s SERVICE 2>/dev/null; \
       security add-generic-password -a "$USER" -s SERVICE -w 'KEY' -A
+
+## Round 5d — OpenAI request shape validated live
+
+The OpenAI admin key became readable once its Keychain ACL was fixed, and the
+first live call returned **403 `Missing scopes: api.usage.read`** — not a 400.
+
+That is the useful part: a 403 means the endpoint **accepted the request** and
+refused it on permissions alone. The query parameters that had only ever been
+fixture-tested — `group_by=model` (singular, no brackets), unix-second
+`start_time`/`end_time`, `bucket_width`, `limit` — are therefore confirmed
+well-formed against the real server. Only the credential's scope is missing.
+
+Consequences:
+
+- **`key_kind_warning` was too strict for OpenAI.** The server's own message
+  says a *restricted* key with the right scope works, so a `sk-proj…` key is not
+  categorically wrong. The warning now names both routes: an admin key, or this
+  key granted `api.usage.read`.
+- **403 output reordered.** The server's message is the most specific
+  information available, so it now leads and the generic guidance follows.
+- **Stopped repeating the key-kind warning** in the failure text: it is already
+  printed before the request, so the human-readable path said it twice. It is
+  still appended under `--json`, where nothing was printed beforehand.
+
+Remaining: the Anthropic key is still Keychain-blocked, so
+`usage --provider claude` is the one path never exercised against a live server.

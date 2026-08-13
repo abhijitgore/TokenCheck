@@ -300,7 +300,9 @@ def _cmd_usage(args: argparse.Namespace, style: render.Style) -> int:
     try:
         report = fetch()
     except api.APIError as error:
-        if warning and error.status in (401, 403):
+        # The warning was already printed before the request; repeating it in
+        # the failure would say the same thing twice.
+        if warning and args.json and error.status in (401, 403):
             raise api.APIError(f"{error}\n{warning}", status=error.status) from error
         raise
 

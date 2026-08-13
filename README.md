@@ -318,8 +318,10 @@ will not authorize the Usage & Cost API. Org owner or admin role required.
 
 **OpenAI.** The subscription path reads the token Codex CLI writes to
 `~/.codex/auth.json` (`$CODEX_HOME` respected); re-auth is `codex login`. The
-usage path needs an admin key (`sk-admin…`) from
-<https://platform.openai.com/settings/organization/admin-keys>, resolved from
+usage path needs either an admin key (`sk-admin…`) from
+<https://platform.openai.com/settings/organization/admin-keys>, or a project key
+carrying the `api.usage.read` scope — OpenAI's own 403 names both routes. It is
+resolved from
 `--admin-key`, then `$OPENAI_ADMIN_KEY`, then `$OPENAI_API_KEY`, then the
 Keychain item `openai_admin_key`.
 

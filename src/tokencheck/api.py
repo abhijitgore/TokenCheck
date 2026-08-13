@@ -115,10 +115,12 @@ def _http_error(label: str, status: int, detail: str, headers: Any, auth_hint: s
     if status == 401:
         return APIError(f"{label}: unauthorized (HTTP 401). {auth_hint}", status=status)
     if status == 403:
+        # The server's own message is the most specific thing available, so it
+        # leads; the generic guidance follows it.
+        server_says = f"\n  {detail}" if detail else ""
         return APIError(
-            f"{label}: forbidden (HTTP 403). This credential lacks access to that endpoint. "
-            + auth_hint
-            + (f" ({detail})" if detail else ""),
+            f"{label}: forbidden (HTTP 403). This credential lacks access to that endpoint."
+            f"{server_says}\n  {auth_hint}",
             status=status,
         )
     if status == 429:

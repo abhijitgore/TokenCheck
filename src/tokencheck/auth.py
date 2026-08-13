@@ -119,6 +119,13 @@ KEY_PREFIXES = {
     "openai": {"admin": "sk-admin", "regular": "sk-proj"},
 }
 
+#: OpenAI grants usage access either through an admin key or through a project
+#: key carrying an explicit scope — its own 403 says so — so the warning names
+#: both routes rather than insisting on an admin key.
+_EXTRA_ROUTE = {
+    "openai": " Alternatively, grant this key the `api.usage.read` scope.",
+}
+
 
 def key_kind_warning(key: str, vendor: str) -> str | None:
     """Warn when a key is clearly not the admin kind. None when it looks right."""
@@ -131,6 +138,7 @@ def key_kind_warning(key: str, vendor: str) -> str | None:
         return (
             f"This looks like a regular API key (`{prefixes['regular']}…`), not an "
             f"admin key (`{prefixes['admin']}…`). The usage endpoints will reject it."
+            + _EXTRA_ROUTE.get(vendor, "")
         )
     return None
 
