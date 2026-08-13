@@ -199,10 +199,42 @@ class CodexCredential:
     account_id: str | None = None
     auth_mode: str | None = None
     expires_at: float | None = None
+    id_token: str | None = None
 
     @property
     def is_expired(self) -> bool:
         return self.expires_at is not None and self.expires_at <= time.time()
+
+    def identity_claims(self) -> dict[str, Any]:
+        """Account details carried in the id_token.
+
+        These are a snapshot from the last token refresh, so anything the live
+        API also reports (plan, email) should prefer the API. What only the
+        claims have is org membership and role.
+
+        Returns only the fields TokenCheck renders — never the raw token, and
+        never the session identifiers (`sid`, `jti`) the claims also carry.
+        """
+        if not self.id_token:
+            return {}
+        claims = decode_jwt_claims(self.id_token)
+        auth_claim = claims.get("https://api.openai.com/auth")
+        auth_claim = auth_claim if isinstance(auth_claim, dict) else {}
+
+        organizations = []
+        for org in auth_claim.get("organizations") or []:
+            if isinstance(org, dict):
+                organizations.append(
+                    {"id": org.get("id"), "title": org.get("title"), "role": org.get("role")}
+                )
+
+        return {
+            "email": claims.get("email"),
+            "user_id": auth_claim.get("chatgpt_user_id"),
+            "account_id": auth_claim.get("chatgpt_account_id"),
+            "plan_type": auth_claim.get("chatgpt_plan_type"),
+            "organizations": organizations,
+        }
 
 
 def codex_home() -> Path:
@@ -214,22 +246,27 @@ def codex_auth_file() -> Path:
     return codex_home() / "auth.json"
 
 
-def _jwt_expiry(token: str) -> float | None:
-    """Read `exp` out of a JWT payload without verifying it.
+def decode_jwt_claims(token: str) -> dict[str, Any]:
+    """Read a JWT payload without verifying it.
 
-    The signature is OpenAI's to check; all we want is whether the token is
-    already stale, so we can say so instead of making a doomed request.
+    The signature is the issuer's to check; all we want is the descriptive
+    claims — expiry, email, org membership — so we can report them without a
+    network round-trip. Never trust these for authorization.
     """
     parts = token.split(".")
     if len(parts) < 2:
-        return None
+        return {}
     payload = parts[1]
     payload += "=" * (-len(payload) % 4)
     try:
         claims = json.loads(base64.urlsafe_b64decode(payload))
     except (ValueError, json.JSONDecodeError):
-        return None
-    expiry = claims.get("exp") if isinstance(claims, dict) else None
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
+def _jwt_expiry(token: str) -> float | None:
+    expiry = decode_jwt_claims(token).get("exp")
     return float(expiry) if isinstance(expiry, (int, float)) else None
 
 
@@ -248,12 +285,14 @@ def _read_codex_credential() -> CodexCredential | None:
     if not isinstance(token, str) or not token.strip():
         return None
 
+    id_token = tokens.get("id_token")
     return CodexCredential(
         access_token=token.strip(),
         source=str(path),
         account_id=tokens.get("account_id"),
         auth_mode=payload.get("auth_mode"),
         expires_at=_jwt_expiry(token.strip()),
+        id_token=id_token if isinstance(id_token, str) else None,
     )
 
 
@@ -352,6 +391,25 @@ def _expiry_detail(credential: Any, reauth: str) -> str:
     return f"expired — {reauth}" if credential.is_expired else "valid"
 
 
+def _credential_row(
+    provider: str, source: str, credential: Any, reauth: str, missing: str = "not found"
+) -> dict[str, object]:
+    """One inventory row. `available` means found; `valid` means usable *now*.
+
+    The two differ for an expired token — the file is right there, but a command
+    relying on it will fail, so callers that are advising the user (like
+    `setup`) must key off `valid`, not `available`.
+    """
+    return {
+        "provider": provider,
+        "method": "oauth",
+        "source": source,
+        "available": credential is not None,
+        "valid": credential is not None and not credential.is_expired,
+        "detail": _expiry_detail(credential, reauth) if credential is not None else missing,
+    }
+
+
 def describe_sources(
     explicit_admin_key: str | None = None,
     explicit_openai_key: str | None = None,
@@ -370,21 +428,20 @@ def describe_sources(
             "method": "oauth",
             "source": f"${OAUTH_TOKEN_ENV}",
             "available": bool(env_token),
+            "valid": bool(env_token),
             "detail": "set" if env_token else "not set",
         }
     )
 
     keychain = _from_keychain()
     rows.append(
-        {
-            "provider": "claude",
-            "method": "oauth",
-            "source": f"macOS Keychain ({KEYCHAIN_SERVICE})",
-            "available": keychain is not None,
-            "detail": _expiry_detail(keychain, "run `claude` to re-authenticate")
-            if keychain is not None
-            else "not found (or access denied)",
-        }
+        _credential_row(
+            "claude",
+            f"macOS Keychain ({KEYCHAIN_SERVICE})",
+            keychain,
+            "run `claude` to re-authenticate",
+            missing="not found (or access denied)",
+        )
     )
 
     for path in credential_files():
@@ -395,6 +452,7 @@ def describe_sources(
                 "method": "oauth",
                 "source": str(path),
                 "available": credential is not None,
+                "valid": credential is not None,
                 "detail": "readable" if credential is not None else "not found",
             }
         )
@@ -410,20 +468,13 @@ def describe_sources(
             "method": "admin",
             "source": "--admin-key / $" + " / $".join(ADMIN_KEY_ENVS),
             "available": admin_available,
+            "valid": admin_available,
             "detail": admin_detail,
         }
     )
 
     codex = _read_codex_credential()
-    rows.append(
-        {
-            "provider": "openai",
-            "method": "oauth",
-            "source": str(codex_auth_file()),
-            "available": codex is not None,
-            "detail": _expiry_detail(codex, "run `codex login`"),
-        }
-    )
+    rows.append(_credential_row("openai", str(codex_auth_file()), codex, "run `codex login`"))
 
     try:
         find_openai_admin_key(explicit_openai_key)
@@ -436,19 +487,16 @@ def describe_sources(
             "method": "admin",
             "source": "--admin-key / $" + " / $".join(OPENAI_ADMIN_KEY_ENVS),
             "available": openai_available,
+            "valid": openai_available,
             "detail": openai_detail,
         }
     )
 
     gemini = _read_gemini_credential()
     rows.append(
-        {
-            "provider": "gemini",
-            "method": "oauth",
-            "source": str(gemini_credential_file()),
-            "available": gemini is not None,
-            "detail": _expiry_detail(gemini, "sign in with `gemini` or Antigravity"),
-        }
+        _credential_row(
+            "gemini", str(gemini_credential_file()), gemini, "run `gemini` (tokens last ~1 hour)"
+        )
     )
 
     return rows

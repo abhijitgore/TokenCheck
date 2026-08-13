@@ -143,6 +143,35 @@ def parse_codex_credits(payload: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def codex_identity(
+    payload: dict[str, Any], claims: dict[str, Any], *, credential_source: str
+) -> dict[str, Any]:
+    """Account identity, preferring the live API over the id_token snapshot.
+
+    The claims are written at token-refresh time and can be months stale — an
+    account that changed plan since then would be misreported. What only the
+    claims carry is organization membership and role, so the two are merged
+    rather than one replacing the other.
+    """
+    organizations = claims.get("organizations") or []
+    default_org = next(
+        (org for org in organizations if org.get("title") or org.get("id")), None
+    )
+    return {
+        "provider": "openai",
+        "title": "ChatGPT / Codex account",
+        "email": payload.get("email") or claims.get("email"),
+        "account_uuid": payload.get("account_id") or claims.get("account_id"),
+        "user_id": payload.get("user_id") or claims.get("user_id"),
+        "organization_name": (default_org or {}).get("title"),
+        "organization_uuid": (default_org or {}).get("id"),
+        "organization_role": (default_org or {}).get("role"),
+        "organizations": organizations,
+        "subscription_type": payload.get("plan_type") or claims.get("plan_type"),
+        "credential_source": credential_source,
+    }
+
+
 def codex_limits_report(payload: dict[str, Any], *, credential_source: str) -> dict[str, Any]:
     return {
         "provider": "openai",

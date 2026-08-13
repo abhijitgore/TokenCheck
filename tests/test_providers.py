@@ -287,3 +287,123 @@ class ProviderCredentials(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Identity(unittest.TestCase):
+    codex_usage = {"email": "live@example.com", "plan_type": "pro", "account_id": "acct-live"}
+    codex_claims = {
+        "email": "stale@example.com",
+        "plan_type": "plus",
+        "account_id": "acct-stale",
+        "user_id": "user-1",
+        "organizations": [{"id": "org-1", "title": "Personal", "role": "owner"}],
+    }
+
+    def test_live_api_wins_over_stale_claims(self):
+        profile = openai_api.codex_identity(
+            self.codex_usage, self.codex_claims, credential_source="test"
+        )
+        # id_token claims are written at refresh time and can be months old.
+        self.assertEqual(profile["email"], "live@example.com")
+        self.assertEqual(profile["subscription_type"], "pro")
+        self.assertEqual(profile["account_uuid"], "acct-live")
+
+    def test_claims_supply_what_the_api_does_not(self):
+        profile = openai_api.codex_identity(
+            self.codex_usage, self.codex_claims, credential_source="test"
+        )
+        self.assertEqual(profile["organization_name"], "Personal")
+        self.assertEqual(profile["organization_role"], "owner")
+        self.assertEqual(profile["user_id"], "user-1")
+
+    def test_claims_alone_still_render(self):
+        profile = openai_api.codex_identity({}, self.codex_claims, credential_source="test")
+        self.assertEqual(profile["email"], "stale@example.com")
+        self.assertIn("ChatGPT / Codex account", render.render_whoami(profile, render.Style(False)))
+
+    def test_identity_claims_filters_session_identifiers(self):
+        import base64
+
+        raw = {
+            "email": "x@example.com",
+            "sid": "session-secret",
+            "jti": "token-id",
+            "https://api.openai.com/auth": {"chatgpt_plan_type": "plus", "organizations": []},
+        }
+        blob = base64.urlsafe_b64encode(json.dumps(raw).encode()).decode().rstrip("=")
+        credential = auth.CodexCredential(
+            access_token="a", source="t", id_token=f"h.{blob}.s"
+        )
+        claims = credential.identity_claims()
+        self.assertEqual(claims["email"], "x@example.com")
+        self.assertNotIn("sid", claims)
+        self.assertNotIn("jti", claims)
+
+    def test_no_id_token_yields_empty_claims(self):
+        self.assertEqual(auth.CodexCredential(access_token="a", source="t").identity_claims(), {})
+
+    def test_gemini_identity(self):
+        profile = gemini_api.identity(
+            {"email": "g@example.com", "name": "G User", "sub": "123"},
+            {"allowedTiers": [{"id": "standard-tier", "name": "Code Assist", "isDefault": True}]},
+            credential_source="test",
+        )
+        self.assertEqual(profile["email"], "g@example.com")
+        self.assertEqual(profile["name"], "G User")
+        self.assertEqual(profile["subscription_type"], "Code Assist")
+        self.assertIn("Gemini account", render.render_whoami(profile, render.Style(False)))
+
+    def test_whoami_skips_absent_fields(self):
+        text = render.render_whoami({"title": "T", "email": "a@b.c"}, render.Style(False))
+        self.assertIn("email", text)
+        self.assertNotIn("org role", text)
+
+
+class SetupReport(unittest.TestCase):
+    def report(self):
+        from tokencheck import cli
+
+        return cli._setup_report()
+
+    def test_every_step_resolves_to_a_state(self):
+        for step in self.report()["steps"]:
+            self.assertIn("done", step)
+            self.assertIn("fix", step)
+            self.assertIsInstance(step["done"], bool)
+
+    def test_expired_is_not_done(self):
+        for step in self.report()["steps"]:
+            if step.get("expired"):
+                self.assertFalse(step["done"], f"{step['name']} expired but marked done")
+
+    def test_renders_without_color_escapes(self):
+        text = render.render_setup(self.report(), render.Style(False))
+        self.assertNotIn("\033", text)
+        self.assertIn("TokenCheck setup", text)
+
+    def test_never_prints_a_secret(self):
+        text = render.render_setup(self.report(), render.Style(False))
+        for marker in ("eyJ", "ya29.", "gho_"):
+            self.assertNotIn(marker, text)
+
+    def test_sources_carry_a_valid_flag(self):
+        for row in auth.describe_sources():
+            self.assertIn("valid", row)
+            if row["valid"]:
+                self.assertTrue(row["available"], "valid implies available")
+
+
+class BarRendering(unittest.TestCase):
+    def test_width_is_constant_across_percentages(self):
+        # Column alignment depends on this; partial blocks must not change it.
+        for percent in (0, 0.4, 1, 4, 14, 50, 99.6, 100, 150, -5):
+            self.assertEqual(render._visible_len(render.bar(percent, 24)), 24, f"at {percent}%")
+
+    def test_low_percentages_are_distinguishable(self):
+        bars = {render.bar(p, 24) for p in (0.5, 1, 2, 4)}
+        self.assertEqual(len(bars), 4, "sub-cell resolution should separate low values")
+
+    def test_section_rule_matches_title(self):
+        lines = render.section("Title", render.Style(False))
+        self.assertEqual(lines[0], "Title")
+        self.assertTrue(set(lines[1]) == {"─"})

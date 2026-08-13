@@ -19,6 +19,12 @@ def _color_enabled(stream: Any = sys.stdout) -> bool:
 
 
 class Style:
+    """ANSI styling, all of it gated on `enabled`.
+
+    Everything decorative lives behind these helpers, so `--no-color` output is
+    the same text with the escapes removed — never a different layout.
+    """
+
     def __init__(self, enabled: bool):
         self.enabled = enabled
 
@@ -40,6 +46,13 @@ class Style:
     def red(self, text: str) -> str:
         return self._wrap("31", text)
 
+    def accent(self, text: str) -> str:
+        """The one accent colour — section headings and rules."""
+        return self._wrap("36", text)
+
+    def heading(self, text: str) -> str:
+        return self._wrap("1;36", text)
+
     def for_utilization(self, percent: float, text: str) -> str:
         if percent >= 90:
             return self.red(text)
@@ -47,11 +60,36 @@ class Style:
             return self.yellow(text)
         return self.green(text)
 
+    def status(self, ok: bool) -> str:
+        return self.green("✓") if ok else self.dim("·")
+
+
+def section(title: str, style: Style, subtitle: str | None = None, width: int = 64) -> list[str]:
+    """A titled section: accented heading over a rule the title's width."""
+    lines = [style.heading(title), style.accent("─" * min(max(len(title), 24), width))]
+    if subtitle:
+        lines.append(style.dim(f"  {subtitle}"))
+    return lines
+
+
+#: Eighths of a block, so a bar resolves finer than its cell count.
+_PARTIALS = " ▏▎▍▌▋▊▉"
+
 
 def bar(percent: float, width: int = BAR_WIDTH) -> str:
+    """A utilization bar with sub-cell resolution.
+
+    Rounding to whole cells makes 1% and 4% look identical; the partial-block
+    glyphs give each of the low percentages a visibly different bar, which is
+    the range subscription usage actually sits in most of the time.
+    """
     clamped = max(0.0, min(percent, 100.0))
-    filled = int(round(clamped / 100 * width))
-    return "█" * filled + "░" * (width - filled)
+    eighths = int(round(clamped / 100 * width * 8))
+    filled, remainder = divmod(eighths, 8)
+    out = "█" * filled
+    if remainder and filled < width:
+        out += _PARTIALS[remainder]
+    return out + "░" * (width - _visible_len(out))
 
 
 def parse_iso(value: Any) -> dt.datetime | None:
@@ -145,15 +183,11 @@ def render_limits(report: dict[str, Any], style: Style) -> str:
     Shared by Claude, ChatGPT/Codex and Gemini — each supplies its own `title`
     and a list of `windows` normalized to percent-used plus a reset time.
     """
-    lines: list[str] = []
     header = report.get("title") or "Claude subscription limits"
     plan = report.get("subscription_type")
     if plan:
         header += f"  ({plan})"
-    lines.append(style.bold(header))
-    account = report.get("account")
-    if account:
-        lines.append(style.dim(f"  {account}"))
+    lines = section(header, style, report.get("account"))
     lines.append("")
 
     windows = report.get("windows") or []
@@ -228,8 +262,8 @@ def render_usage(report: dict[str, Any], style: Style, *, show_daily: bool) -> s
 
     title = report.get("title") or "Claude API org usage"
     described = report.get("period_description")
-    heading = f"{title}  ({described}: {span})" if described else f"{title}  ({span})"
-    lines.append(style.bold(heading))
+    subtitle = f"{described}   {span}" if described else span
+    lines.extend(section(title, style, subtitle))
     lines.append("")
     lines.append(
         "  "
@@ -342,35 +376,109 @@ def _bucket_label(bucket: dict[str, Any], hourly: bool) -> str:
     return moment.astimezone().strftime("%b %-d %H:%M")
 
 
-_PROVIDER_TITLES = {
-    "claude": "Claude subscription limits",
-    "openai": "ChatGPT / Codex limits",
-    "gemini": "Gemini quota",
-}
+PROVIDER_NAMES = {"claude": "Claude", "openai": "ChatGPT / Codex", "gemini": "Gemini"}
 
 
-def render_provider_error(provider: str, message: str, style: Style) -> str:
-    """Stand-in section for a provider that could not be reached in `--provider all`."""
-    lines = [style.bold(_PROVIDER_TITLES.get(provider, provider))]
+def render_provider_error(provider: str, message: str, style: Style, suffix: str = "") -> str:
+    """Stand-in section for a provider that could not be reached under `--provider all`.
+
+    Titled to match the command that was asked for, so an unreachable provider
+    reads as the same section it would have been, not a differently-named one.
+    """
+    title = PROVIDER_NAMES.get(provider, provider)
+    lines = section(f"{title} {suffix}".strip(), style)
     lines.append("")
-    for line in message.splitlines():
-        lines.append(style.dim(f"  {line}"))
+    for index, line in enumerate(message.splitlines()):
+        # First line is the problem; the rest is guidance.
+        lines.append(style.yellow(f"  {line}") if index == 0 else style.dim(f"  {line}"))
     return "\n".join(lines)
 
 
+#: Rendered in this order; absent fields are skipped, so one layout serves
+#: three providers that each expose a different subset.
+_WHOAMI_FIELDS = (
+    ("name", "name"),
+    ("email", "email"),
+    ("plan", "subscription_type"),
+    ("organization", "organization_name"),
+    ("org role", "organization_role"),
+    ("org uuid", "organization_uuid"),
+    ("project", "project_id"),
+    ("account uuid", "account_uuid"),
+    ("user id", "user_id"),
+    ("credential", "credential_source"),
+)
+
+
 def render_whoami(profile: dict[str, Any], style: Style) -> str:
-    lines = [style.bold("Claude account")]
-    for label, key in (
-        ("email", "email"),
-        ("organization", "organization_name"),
-        ("org uuid", "organization_uuid"),
-        ("account uuid", "account_uuid"),
-        ("plan", "subscription_type"),
-        ("credential", "credential_source"),
-    ):
-        value = profile.get(key)
-        if value:
-            lines.append(f"  {label:<14}{value}")
+    lines = section(profile.get("title") or "Claude account", style)
+    lines.append("")
+
+    present = [(label, profile.get(key)) for label, key in _WHOAMI_FIELDS if profile.get(key)]
+    width = max((len(label) for label, _ in present), default=0)
+    for label, value in present:
+        lines.append(f"  {style.dim(label.ljust(width))}   {value}")
+
+    extra = [org for org in profile.get("organizations") or [] if org.get("id")]
+    if len(extra) > 1:
+        lines.append("")
+        lines.append(style.dim(f"  {len(extra)} organizations:"))
+        for org in extra:
+            role = f" ({org['role']})" if org.get("role") else ""
+            lines.append(f"    {org.get('title') or org['id']}{style.dim(role)}")
+
+    return "\n".join(lines)
+
+
+def render_setup(report: dict[str, Any], style: Style) -> str:
+    """What this machine has, what it is missing, and the fix for each gap."""
+    steps = report.get("steps") or []
+    done = [s for s in steps if s["done"]]
+    todo = [s for s in steps if not s["done"]]
+
+    lines = section(
+        "TokenCheck setup", style, f"{len(done)} of {len(steps)} credentials configured"
+    )
+    lines.append("")
+
+    width = max((len(s["name"]) for s in steps), default=0)
+    for step in steps:
+        # An expired credential is distinct from a missing one: the setup work
+        # is done, it just needs renewing.
+        mark = style.yellow("!") if step.get("expired") else style.status(step["done"])
+        detail = "signed in but expired" if step.get("expired") else step["unlocks"]
+        lines.append(f"  {mark} {step['name'].ljust(width)}   {style.dim(detail)}")
+
+    if todo:
+        lines.append("")
+        lines.extend(section("To finish", style))
+        for step in todo:
+            lines.append("")
+            label = f"{step['name']} (expired)" if step.get("expired") else step["name"]
+            lines.append(f"  {label}")
+            lines.append(f"      {style.bold(step['fix'])}")
+            if step.get("note"):
+                lines.append(f"      {style.dim(step['note'])}")
+    else:
+        lines.append("")
+        lines.append(style.green("  Everything is configured."))
+
+    telemetry = report.get("telemetry") or {}
+    lines.append("")
+    lines.extend(section("Optional: capture emitted telemetry", style))
+    if telemetry.get("capturing"):
+        lines.append("")
+        lines.append(f"  {style.status(True)} already capturing to {telemetry.get('store')}")
+        lines.append(style.dim("      read it back with `tokencheck telemetry`"))
+    else:
+        lines.append("")
+        lines.append(style.dim("  Claude Code emits OpenTelemetry only when something is listening."))
+        lines.append(style.dim("  Run `tokencheck collect` in one shell, then in the shell you run"))
+        lines.append(style.dim("  `claude` from:"))
+        lines.append("")
+        for export in telemetry.get("exports") or []:
+            lines.append(f"      {style.dim(export)}")
+
     return "\n".join(lines)
 
 

@@ -177,3 +177,58 @@ against bogus keys and produce the correct provider-specific 401 guidance.
 
 Still not committed — `/Users/abhijitgore` is the enclosing git repo. Run
 `git init` inside TokenCheck before any `git add`.
+
+---
+
+# Round 4 — multi-provider whoami, setup, output polish
+
+- [x] `whoami --provider claude|openai|gemini|all`
+- [x] `setup` subcommand + `--setup` alias — live gap analysis, prints commands only
+- [x] Output polish: accent-coloured section headings and rules, sub-cell
+      utilization bars, aligned key/value blocks, status marks
+
+## Decisions worth recording
+
+**whoami is hybrid per provider, not claims-only.** The Codex id_token carries
+`chatgpt_subscription_last_checked` six months stale, so plan/email come from
+the live `wham/usage` call and only org membership + role — which the API does
+not return — come from the id_token. Gemini uses the live `userinfo` endpoint
+plus best-effort `loadCodeAssist` for tier.
+
+**The id_token is never printed**, including under `--json`. `identity_claims()`
+returns an allowlist; the raw claims also carry `sid`/`jti` session identifiers.
+
+**`--setup` had to be resolved before the bare-invocation fallback.** `main()`
+re-parses a bare command as `[*argv, "limits"]`, which would have swallowed a
+top-level `--setup` and silently run `limits` instead.
+
+**`setup` keys off `valid`, not `available`.** An expired credential is present
+on disk but unusable, so `describe_sources()` now reports both and setup marks
+that case `!` ("signed in but expired") rather than a green tick — the fix for
+it is a re-login, not a first-time setup.
+
+**Bars gained sub-cell resolution.** Rounding to whole cells made 1% and 4%
+render identically, which is the range subscription usage usually sits in.
+Partial block glyphs separate them; `_visible_len` stays constant at the bar
+width, so column alignment is unaffected (pinned by test).
+
+## Finding: Gemini tokens expire hourly
+
+Google issues Gemini access tokens with a ~1 hour lifetime. With the no-refresh
+policy, `limits -p gemini` therefore fails unless Gemini was used recently — it
+expired mid-session during this work. The message now says so explicitly rather
+than implying misuse.
+
+Unlike Anthropic and OpenAI, Google does *not* rotate the refresh token on use,
+so refreshing Gemini would be safe in principle. It needs the Gemini CLI's OAuth
+client id/secret, which CodexBar extracts from the installed `gemini` package —
+not installed on this machine. Left unimplemented; it is the obvious next step
+if hourly re-auth becomes annoying.
+
+## Review
+
+92 tests pass. Live-verified: `whoami -p all` (Claude and Codex full identity;
+Gemini correctly reported expired), `setup` (2 of 5 configured, `!` on Gemini),
+`limits -p all` with the new styling. `--no-color` emits zero ANSI escapes and
+`--json` remains structurally unchanged; both pinned by test, as is the absence
+of any JWT in output.

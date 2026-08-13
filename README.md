@@ -68,7 +68,8 @@ PYTHONPATH=src python3 -m tokencheck
 | `tokencheck telemetry` | Renders the captured metrics and events | — |
 | `tokencheck all` | Plan, limits, local usage and telemetry in one view | OAuth |
 | `tokencheck usage` | Org-wide input/cache/output tokens and USD cost | Admin API key |
-| `tokencheck whoami` | Account email, organization, plan | OAuth |
+| `tokencheck whoami` | Account, organization, role and plan — for any provider | OAuth |
+| `tokencheck setup` | What this machine still needs, and the command for each gap | — |
 | `tokencheck auth` | Which credential sources are present (no secrets printed) | — |
 
 Every command takes `--json` and `--no-color`. `local` also takes
@@ -122,6 +123,9 @@ Gemini quota  (Gemini Code Assist)
   gemini-2.5-flash       ░░░░░░░░░░░░░░░░░░░░░░░░   0.0%  resets in 23h 59m (Aug 14, 3:08 PM)
 ```
 
+`whoami` takes the same `--provider`, reporting the account behind each
+credential — email, plan, organization and role.
+
 `tokencheck usage --provider claude|openai` fetches org-wide token counts and
 cost. **Gemini has no `usage` mode**, and this is a limit of the platform rather
 than an omission: Google publishes no API returning token counts or spend for a
@@ -138,6 +142,33 @@ What each provider reports:
 | Token counts by model | ✓ admin key | ✓ admin key | **not offered** |
 | Cost | ✓ admin key | ✓ admin key | **not offered** |
 | Cache-write tokens | ✓ | not reported by the API | — |
+
+## Setting up a machine
+
+`tokencheck setup` (or `tokencheck --setup`) inspects what is already
+configured and prints the exact command for each gap — nothing more. It never
+runs an installer or a login flow.
+
+```
+$ tokencheck setup
+TokenCheck setup
+─────────────────
+  2 of 5 credentials configured
+
+  ✓ Claude subscription   tokencheck limits, plan, whoami
+  ✓ ChatGPT / Codex       tokencheck limits -p openai, whoami -p openai
+  ! Gemini                signed in but expired
+  · Anthropic admin key   tokencheck usage
+  · OpenAI admin key      tokencheck usage -p openai
+```
+
+`!` distinguishes a credential that exists but has expired from one that was
+never set up — different problems, different fixes.
+
+**Gemini expires hourly.** Google issues these access tokens with a ~1 hour
+lifetime, so unless you have used Gemini recently, `limits -p gemini` will
+report the token expired. That is expected, not a fault. TokenCheck does not
+refresh it — see the no-refresh policy below.
 
 ## Local usage — why deduplication is the whole game
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .api import APIError, _get_json
+from .api import APIError, _get_json  # noqa: F401 - APIError re-raised by callers
 from .util import as_float, parse_iso
 
 QUOTA_URL = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota"
@@ -146,6 +146,41 @@ def limits_report(
     if info.get("ineligible"):
         report["ineligible_tiers"] = info["ineligible"]
     return report
+
+
+USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+
+
+def fetch_userinfo(access_token: str) -> dict[str, Any]:
+    """Google account identity for the signed-in Gemini user."""
+    payload = _get_json(
+        USERINFO_URL,
+        {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+            "User-Agent": "TokenCheck/0.1",
+        },
+        label="gemini userinfo",
+        auth_hint=REAUTH_HINT,
+    )
+    return payload if isinstance(payload, dict) else {}
+
+
+def identity(
+    userinfo: dict[str, Any], tier: dict[str, Any] | None, *, credential_source: str
+) -> dict[str, Any]:
+    info = parse_tier(tier)
+    return {
+        "provider": "gemini",
+        "title": "Gemini account",
+        "email": userinfo.get("email"),
+        "name": userinfo.get("name"),
+        "account_uuid": userinfo.get("sub"),
+        "organization_name": userinfo.get("hd"),
+        "project_id": info.get("project_id"),
+        "subscription_type": info.get("tier_name") or info.get("tier_id"),
+        "credential_source": credential_source,
+    }
 
 
 def next_reset(windows: list[dict[str, Any]]) -> str | None:

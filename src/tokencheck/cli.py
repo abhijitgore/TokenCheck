@@ -34,6 +34,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"tokencheck {__version__}")
     parser.add_argument("--json", action="store_true", help="emit JSON instead of a table")
     parser.add_argument("--no-color", action="store_true", help="disable ANSI color")
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="show what this machine still needs to report every provider",
+    )
 
     sub = parser.add_subparsers(dest="command")
 
@@ -64,9 +69,20 @@ def _build_parser() -> argparse.ArgumentParser:
     usage.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     usage.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
-    whoami = sub.add_parser("whoami", help="which Claude account the credential belongs to")
+    whoami = sub.add_parser("whoami", help="which account each credential belongs to")
+    whoami.add_argument(
+        "--provider",
+        "-p",
+        choices=("claude", "openai", "gemini", "all"),
+        default="claude",
+        help="which provider's account to report (default: claude)",
+    )
     whoami.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     whoami.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
+    setup = sub.add_parser("setup", help="what this machine still needs, and the command for each gap")
+    setup.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    setup.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
     auth_cmd = sub.add_parser("auth", help="show which credential sources are available")
     auth_cmd.add_argument("--admin-key", help=argparse.SUPPRESS)
@@ -180,8 +196,10 @@ def _gemini_limits(include_raw: bool) -> dict[str, Any]:
     credential = auth.find_gemini_credential()
     if credential.is_expired:
         raise auth.AuthError(
-            "Gemini access token has expired. Sign in again with the Gemini CLI "
-            "(`gemini`) or Antigravity to refresh ~/.gemini/oauth_creds.json."
+            "Gemini access token has expired.\n"
+            "Google issues these with a ~1 hour lifetime, so this is expected unless you\n"
+            "have used Gemini recently. Run `gemini` (or open Antigravity) to refresh\n"
+            "~/.gemini/oauth_creds.json, then try again."
         )
 
     quota = gemini_api.fetch_quota(credential.access_token)
@@ -199,33 +217,49 @@ _LIMIT_PROVIDERS = {
 }
 
 
-def _cmd_limits(args: argparse.Namespace, style: render.Style) -> int:
-    provider = getattr(args, "provider", "claude")
+def _per_provider(
+    args: argparse.Namespace,
+    style: render.Style,
+    builders: dict[str, Any],
+    renderer: Any,
+    provider: str,
+    error_suffix: str = "",
+) -> int:
+    """Run one provider, or survey them all.
+
+    Under `all`, one provider being unconfigured or unreachable must not
+    suppress the others — each failure is reported in its own section and the
+    run only fails if every provider fails.
+    """
     include_raw = bool(args.json)
 
     if provider != "all":
-        report = _LIMIT_PROVIDERS[provider](include_raw)
-        _emit(report, render.render_limits(report, style), as_json=args.json)
+        report = builders[provider](include_raw)
+        _emit(report, renderer(report, style), as_json=args.json)
         return EXIT_OK
 
-    # `all` is a survey, so one provider being unconfigured or down must not
-    # suppress the others — each failure is reported in place.
     reports: list[dict[str, Any]] = []
     sections: list[str] = []
     failures = 0
-    for name, fetch in _LIMIT_PROVIDERS.items():
+    for name, build in builders.items():
         try:
-            report = fetch(include_raw)
+            report = build(include_raw)
         except (auth.AuthError, api.APIError) as error:
             failures += 1
             reports.append({"provider": name, "error": str(error)})
-            sections.append(render.render_provider_error(name, str(error), style))
+            sections.append(render.render_provider_error(name, str(error), style, error_suffix))
             continue
         reports.append(report)
-        sections.append(render.render_limits(report, style))
+        sections.append(renderer(report, style))
 
     _emit(reports, "\n\n".join(sections), as_json=args.json)
-    return EXIT_OK if failures < len(_LIMIT_PROVIDERS) else EXIT_AUTH
+    return EXIT_OK if failures < len(builders) else EXIT_AUTH
+
+
+def _cmd_limits(args: argparse.Namespace, style: render.Style) -> int:
+    return _per_provider(
+        args, style, _LIMIT_PROVIDERS, render.render_limits, getattr(args, "provider", "claude"), "limits"
+    )
 
 
 def _cmd_usage(args: argparse.Namespace, style: render.Style) -> int:
@@ -243,12 +277,14 @@ def _cmd_usage(args: argparse.Namespace, style: render.Style) -> int:
     return EXIT_OK
 
 
-def _cmd_whoami(args: argparse.Namespace, style: render.Style) -> int:
+def _claude_whoami(include_raw: bool) -> dict[str, Any]:
     credential = auth.find_oauth_credential()
     payload = api.fetch_oauth_profile(credential.access_token)
     account = payload.get("account") if isinstance(payload.get("account"), dict) else {}
     organization = payload.get("organization") if isinstance(payload.get("organization"), dict) else {}
     profile = {
+        "provider": "claude",
+        "title": "Claude account",
         "email": account.get("email_address") or account.get("email") or payload.get("email_address"),
         "account_uuid": account.get("uuid"),
         "organization_name": organization.get("name"),
@@ -256,15 +292,143 @@ def _cmd_whoami(args: argparse.Namespace, style: render.Style) -> int:
         "subscription_type": credential.subscription_type,
         "credential_source": credential.source,
     }
-    if args.json:
+    if include_raw:
         profile["raw"] = payload
-    _emit(profile, render.render_whoami(profile, style), as_json=args.json)
-    return EXIT_OK
+    return profile
+
+
+def _openai_whoami(include_raw: bool) -> dict[str, Any]:
+    credential = auth.find_codex_credential()
+    if credential.is_expired:
+        raise auth.AuthError("Codex access token has expired. Run `codex login` to refresh it.")
+
+    payload = openai_api.fetch_codex_usage(credential.access_token, credential.account_id)
+    profile = openai_api.codex_identity(
+        payload, credential.identity_claims(), credential_source=credential.source
+    )
+    if include_raw:
+        # The id_token itself is deliberately never included.
+        profile["raw"] = payload
+    return profile
+
+
+def _gemini_whoami(include_raw: bool) -> dict[str, Any]:
+    credential = auth.find_gemini_credential()
+    if credential.is_expired:
+        raise auth.AuthError(
+            "Gemini access token has expired.\n"
+            "Google issues these with a ~1 hour lifetime. Run `gemini` (or open\n"
+            "Antigravity) to refresh it, then try again."
+        )
+
+    userinfo = gemini_api.fetch_userinfo(credential.access_token)
+    tier = gemini_api.fetch_tier(credential.access_token)
+    profile = gemini_api.identity(userinfo, tier, credential_source=credential.source)
+    if include_raw:
+        profile["raw"] = {"userinfo": userinfo, "tier": tier}
+    return profile
+
+
+_WHOAMI_PROVIDERS = {
+    "claude": _claude_whoami,
+    "openai": _openai_whoami,
+    "gemini": _gemini_whoami,
+}
+
+
+def _cmd_whoami(args: argparse.Namespace, style: render.Style) -> int:
+    return _per_provider(
+        args, style, _WHOAMI_PROVIDERS, render.render_whoami, getattr(args, "provider", "claude"), "account"
+    )
 
 
 def _cmd_auth(args: argparse.Namespace, style: render.Style) -> int:
     rows = auth.describe_sources(getattr(args, "admin_key", None))
     _emit(rows, render.render_auth(rows, style), as_json=args.json)
+    return EXIT_OK
+
+
+#: Each step names what it unlocks and the single command that closes the gap.
+#: `setup` only ever *prints* these — it never runs an installer or a login.
+_SETUP_STEPS: list[dict[str, Any]] = [
+    {
+        "provider": "claude",
+        "name": "Claude subscription",
+        "unlocks": "tokencheck limits, plan, whoami",
+        "fix": "claude   # sign in when prompted",
+        "note": "or `claude setup-token` and export $CLAUDE_CODE_OAUTH_TOKEN on a headless box",
+    },
+    {
+        "provider": "openai",
+        "name": "ChatGPT / Codex",
+        "unlocks": "tokencheck limits -p openai, whoami -p openai",
+        "fix": "codex login",
+        "note": "install the Codex CLI first if `codex` is not on PATH",
+    },
+    {
+        "provider": "gemini",
+        "name": "Gemini",
+        "unlocks": "tokencheck limits -p gemini, whoami -p gemini",
+        "fix": "gemini   # or sign in via Antigravity",
+        "note": "writes ~/.gemini/oauth_creds.json",
+    },
+    {
+        "provider": "claude",
+        "method": "admin",
+        "name": "Anthropic admin key",
+        "unlocks": "tokencheck usage",
+        "fix": "export ANTHROPIC_ADMIN_KEY=sk-ant-admin...",
+        "note": "mint at console.anthropic.com/settings/admin-keys (org owner/admin)",
+    },
+    {
+        "provider": "openai",
+        "method": "admin",
+        "name": "OpenAI admin key",
+        "unlocks": "tokencheck usage -p openai",
+        "fix": "export OPENAI_ADMIN_KEY=sk-admin...",
+        "note": "mint at platform.openai.com/settings/organization/admin-keys",
+    },
+]
+
+
+def _setup_report() -> dict[str, Any]:
+    """What this machine has, what it is missing, and the fix for each gap."""
+    rows = auth.describe_sources()
+    # A credential that exists but has expired is not "done" — keying off
+    # `valid` rather than `available` is what makes the advice actionable.
+    usable: dict[tuple[str, str], bool] = {}
+    present: dict[tuple[str, str], bool] = {}
+    for row in rows:
+        key = (str(row["provider"]), str(row["method"]))
+        usable[key] = usable.get(key, False) or bool(row.get("valid"))
+        present[key] = present.get(key, False) or bool(row["available"])
+
+    steps = []
+    for step in _SETUP_STEPS:
+        key = (step["provider"], step.get("method", "oauth"))
+        steps.append(
+            {
+                **step,
+                "method": key[1],
+                "done": usable.get(key, False),
+                "expired": present.get(key, False) and not usable.get(key, False),
+            }
+        )
+
+    return {
+        "steps": steps,
+        "telemetry": {
+            "capturing": bool(otlp.store_files()),
+            "exports": otlp.env_exports(otlp.DEFAULT_PORT, otlp.DEFAULT_HOST),
+            "store": str(otlp.data_dir()),
+        },
+        "sources": rows,
+    }
+
+
+def _cmd_setup(args: argparse.Namespace, style: render.Style) -> int:
+    report = _setup_report()
+    _emit(report, render.render_setup(report, style), as_json=args.json)
     return EXIT_OK
 
 
@@ -399,6 +563,7 @@ _COMMANDS = {
     "usage": _cmd_usage,
     "whoami": _cmd_whoami,
     "auth": _cmd_auth,
+    "setup": _cmd_setup,
     "local": _cmd_local,
     "plan": _cmd_plan,
     "collect": _cmd_collect,
@@ -411,11 +576,13 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
     args = parser.parse_args(argv)
-    command = args.command or "limits"
+
+    # `--setup` is an alias for the `setup` subcommand, so it has to be resolved
+    # before the bare-invocation fallback below turns it into `limits`.
+    command = args.command or ("setup" if getattr(args, "setup", False) else "limits")
     if args.command is None:
-        # Bare `tokencheck` runs `limits`; re-parse so that subcommand's
-        # defaults are present on the namespace.
-        args = parser.parse_args([*argv, "limits"])
+        # Re-parse so the chosen subcommand's defaults are on the namespace.
+        args = parser.parse_args([*[a for a in argv if a != "--setup"], command])
 
     style = render.Style(enabled=not args.no_color and render._color_enabled())
 
