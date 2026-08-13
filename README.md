@@ -127,7 +127,10 @@ Gemini quota  (Gemini Code Assist)
 credential — email, plan, organization and role.
 
 `tokencheck usage --provider claude|openai` fetches org-wide token counts and
-cost. **Gemini has no `usage` mode**, and this is a limit of the platform rather
+cost. **It reports API billing only.** Claude Pro/Max and ChatGPT Plus/Pro
+subscription usage is not billed per token and never appears in these reports —
+`limits` and `local` are the commands that cover subscription consumption. On an
+individual Anthropic account `usage` cannot be used at all (see below). **Gemini has no `usage` mode**, and this is a limit of the platform rather
 than an omission: Google publishes no API returning token counts or spend for a
 Gemini account. Quota-remaining per model is the whole picture Gemini offers, so
 `--period` does not apply to it either.
@@ -310,8 +313,13 @@ Claude Code's refresh token would invalidate the session Claude Code itself is
 holding. If the token has expired, TokenCheck says so and asks you to run
 `claude`.
 
-**Admin API key.** Resolved from `--admin-key`, then `$ANTHROPIC_ADMIN_KEY`,
-then `$ANTHROPIC_ADMIN_API_KEY`, then the macOS Keychain item
+**Admin API key — organizations only.** Anthropic's
+[Admin API docs](https://platform.claude.com/docs/en/manage-claude/admin-api)
+state plainly: *"The Admin API is unavailable for individual accounts."* An
+`sk-ant-admin…` key can only be provisioned by an admin of a Console
+organization, so on a personal account there is no such key to create and
+`tokencheck usage` is simply not applicable. Resolved from `--admin-key`, then
+`$ANTHROPIC_ADMIN_KEY`, then `$ANTHROPIC_ADMIN_API_KEY`, then the Keychain item
 `anthropic_admin_key`. This must be an admin key (`sk-ant-admin…`)
 from <https://console.anthropic.com/settings/admin-keys> — a regular API key
 will not authorize the Usage & Cost API. Org owner or admin role required.

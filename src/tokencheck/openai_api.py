@@ -32,11 +32,11 @@ CODEX_REAUTH_HINT = "The Codex credential is expired or revoked — run `codex l
 #: As on the Anthropic side, a 401 is the only signal an API key has expired or
 #: been revoked — the server does not distinguish that from the wrong key kind.
 ADMIN_KEY_HINT = (
-    "The key was rejected. It is expired, revoked, or not an admin key.\n"
-    "  Mint a fresh one at https://platform.openai.com/settings/organization/admin-keys "
-    "(it must start with `sk-admin`, not `sk-proj`), then replace the stored copy:\n"
-    "    security delete-generic-password -s openai_admin_key 2>/dev/null; "
-    "security add-generic-password -a \"$USER\" -s openai_admin_key -w 'sk-admin...' -A"
+    "The key was rejected. It is expired, revoked, or lacks usage access.\n"
+    "  Grant this key the `api.usage.read` scope, or use an organization admin\n"
+    "  key — OpenAI's own 403 names both routes.\n"
+    "  This report covers API usage only. ChatGPT subscription usage is not\n"
+    "  billed per token and never appears here — use `tokencheck limits -p openai`."
 )
 
 #: `/v1/organization/costs` only buckets by day, unlike the usage endpoint.

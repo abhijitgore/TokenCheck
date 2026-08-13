@@ -409,19 +409,21 @@ _SETUP_STEPS: list[dict[str, Any]] = [
         "provider": "claude",
         "method": "admin",
         "name": "Anthropic admin key",
-        "unlocks": "tokencheck usage",
+        "unlocks": "tokencheck usage (optional — API billing only)",
         "fix": auth.rotate_command(auth.ANTHROPIC_ADMIN_KEYCHAIN_SERVICE, "sk-ant-admin..."),
-        "note": "mint at console.anthropic.com/settings/admin-keys (org owner/admin). "
-        "deleting first is required: -U keeps the old ACL. $ANTHROPIC_ADMIN_KEY also works",
+        "note": "requires a Console organization — the Admin API is unavailable for "
+        "individual accounts. Covers API usage only, not Pro/Max subscription usage",
+        "optional": True,
     },
     {
         "provider": "openai",
         "method": "admin",
         "name": "OpenAI admin key",
-        "unlocks": "tokencheck usage -p openai",
+        "unlocks": "tokencheck usage -p openai (optional — API billing only)",
         "fix": auth.rotate_command(auth.OPENAI_ADMIN_KEYCHAIN_SERVICE, "sk-admin..."),
-        "note": "mint at platform.openai.com/settings/organization/admin-keys. "
-        "deleting first is required: -U keeps the old ACL. $OPENAI_ADMIN_KEY also works",
+        "note": "an admin key, or any key granted the `api.usage.read` scope. "
+        "Covers API usage only, not ChatGPT subscription usage",
+        "optional": True,
     },
 ]
 
@@ -434,6 +436,7 @@ def _setup_report() -> dict[str, Any]:
     usable: dict[tuple[str, str], bool] = {}
     present: dict[tuple[str, str], bool] = {}
     blocked: dict[tuple[str, str], str] = {}
+    reasons: dict[tuple[str, str], str] = {}
     for row in rows:
         key = (str(row["provider"]), str(row["method"]))
         usable[key] = usable.get(key, False) or bool(row.get("valid"))
@@ -442,6 +445,8 @@ def _setup_report() -> dict[str, Any]:
         # is a Keychain ACL change, not minting a new key.
         if "approval pending" in str(row.get("detail", "")):
             blocked[key] = str(row["detail"])
+        if not row.get("valid") and str(row.get("detail")) not in ("not set", "not found"):
+            reasons[key] = str(row["detail"])
 
     steps = []
     for step in _SETUP_STEPS:
@@ -454,7 +459,9 @@ def _setup_report() -> dict[str, Any]:
                 "done": usable.get(key, False),
                 "expired": present.get(key, False) and not usable.get(key, False),
                 "blocked": is_blocked,
-                "status_detail": blocked.get(key) if is_blocked else None,
+                # The inventory already knows exactly why a step is unmet;
+                # reuse its wording instead of inferring a reason here.
+                "status_detail": reasons.get(key),
             }
         )
 

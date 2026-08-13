@@ -560,8 +560,13 @@ class ExpiryReporting(unittest.TestCase):
         for hint in (api.ADMIN_KEY_HINT, openai_api.ADMIN_KEY_HINT):
             self.assertIn("expired", hint)
             self.assertIn("revoked", hint)
-            # and tells you how to replace the stored copy
-            self.assertIn("add-generic-password", hint)
+        # Anthropic's Admin API cannot be used at all from an individual
+        # account, so the hint must say so rather than only offering a URL.
+        self.assertIn("individual accounts", api.ADMIN_KEY_HINT)
+        # Neither report covers subscription usage; saying so avoids a hunt for
+        # Claude Code usage that will never appear there.
+        self.assertIn("subscription usage", api.ADMIN_KEY_HINT)
+        self.assertIn("api.usage.read", openai_api.ADMIN_KEY_HINT)
 
     def test_warning_reaches_the_rendered_report(self):
         report = {

@@ -356,3 +356,39 @@ So `usage --provider claude` is the one path in TokenCheck that has never had a
 meaningful live response, and no amount of probing with a non-admin key can
 change that — it needs a real `sk-ant-admin…` key. Everything else in the tool
 has now been exercised against a real server.
+
+## Round 5f — `usage` was the wrong recommendation all along
+
+Abhijit pushed back that there is no such thing as an admin key for a retail
+user and that the Console URL does not exist for them. **Correct, and the docs
+say so explicitly** — quoted from Anthropic's Admin API page:
+
+> **The Admin API is unavailable for individual accounts.**
+
+An `sk-ant-admin…` key can only be provisioned by an admin of a Console
+*organization*. Not strictly "enterprise" — a Console org qualifies, and one can
+be created from Console → Settings → Organization — but on a plain individual
+account the page genuinely does not exist. I had been repeating that URL for
+several rounds without ever verifying it.
+
+**The more important consequence:** the Usage & Cost API reports *API* usage —
+"historical API usage and cost data for your organization", the same data as the
+Console Usage/Cost pages. Claude Pro/Max subscription usage is not billed per
+token and would not appear there even with a valid admin key. So `tokencheck
+usage` was never the command that would show this machine's Claude Code
+consumption; `limits` (live windows) and `local` (per-response transcript
+totals, with list-price estimates) already are.
+
+Changes:
+
+- Both admin-key hints now state the eligibility limit and the API-billing-only
+  scope, instead of pointing at a URL the user cannot open.
+- `setup` treats admin keys as **optional**: they are rendered `–`, excluded
+  from the "N of M configured" tally, and listed under an Optional section. A
+  step nobody on an individual account can complete should not read as a
+  permanent gap.
+- A key of the wrong *kind* is no longer `valid`, so setup stopped claiming
+  "everything configured" for a key guaranteed to be rejected.
+- `setup` now prints the inventory's own reason string rather than inferring
+  one, which had produced "signed in but expired" for a wrong-kind key.
+- OpenAI hint names the `api.usage.read` scope route, per its own 403.

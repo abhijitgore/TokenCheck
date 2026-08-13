@@ -609,11 +609,13 @@ def describe_sources(
     try:
         key = find_admin_key(explicit_admin_key)
         admin_available = True
-        admin_detail = key_kind_warning(key, "anthropic") or "set"
+        admin_warning = key_kind_warning(key, "anthropic")
+        admin_detail = admin_warning or "set"
+        admin_valid = admin_warning is None
     except KeychainBlocked:
-        admin_available, admin_detail = False, "stored, but Keychain approval pending"
+        admin_available, admin_detail, admin_valid = False, "stored, but Keychain approval pending", False
     except AuthError:
-        admin_available, admin_detail = False, "not set"
+        admin_available, admin_detail, admin_valid = False, "not set", False
     rows.append(
         {
             "provider": "claude",
@@ -622,7 +624,7 @@ def describe_sources(
             + " / $".join(ADMIN_KEY_ENVS)
             + f" / Keychain ({ANTHROPIC_ADMIN_KEYCHAIN_SERVICE})",
             "available": admin_available,
-            "valid": admin_available,
+            "valid": admin_valid,
             "detail": admin_detail,
         }
     )
@@ -633,11 +635,13 @@ def describe_sources(
     try:
         key = find_openai_admin_key(explicit_openai_key)
         openai_available = True
-        openai_detail = key_kind_warning(key, "openai") or "set"
+        openai_warning = key_kind_warning(key, "openai")
+        openai_detail = openai_warning or "set"
+        openai_valid = openai_warning is None
     except KeychainBlocked:
-        openai_available, openai_detail = False, "stored, but Keychain approval pending"
+        openai_available, openai_detail, openai_valid = False, "stored, but Keychain approval pending", False
     except AuthError:
-        openai_available, openai_detail = False, "not set"
+        openai_available, openai_detail, openai_valid = False, "not set", False
     rows.append(
         {
             "provider": "openai",
@@ -646,7 +650,7 @@ def describe_sources(
             + " / $".join(OPENAI_ADMIN_KEY_ENVS)
             + f" / Keychain ({OPENAI_ADMIN_KEYCHAIN_SERVICE})",
             "available": openai_available,
-            "valid": openai_available,
+            "valid": openai_valid,
             "detail": openai_detail,
         }
     )

@@ -73,10 +73,12 @@ OAUTH_REAUTH_HINT = "The credential is expired or revoked — run `claude` to re
 #: wrong-kind-of-key case, since the server reports both identically.
 ADMIN_KEY_HINT = (
     "The key was rejected. It is expired, revoked, or not an Admin API key.\n"
-    "  Mint a fresh one at https://console.anthropic.com/settings/admin-keys "
-    "(it must start with `sk-ant-admin`), then replace the stored copy:\n"
-    "    security delete-generic-password -s anthropic_admin_key 2>/dev/null; "
-    "security add-generic-password -a \"$USER\" -s anthropic_admin_key -w 'sk-ant-admin...' -A"
+    "  Note: Anthropic's Admin API is unavailable for individual accounts — an\n"
+    "  Admin key (`sk-ant-admin…`) can only be provisioned by an admin of a\n"
+    "  Console *organization* (Console -> Settings -> Organization).\n"
+    "  This report also covers API usage only. Claude Pro/Max subscription usage\n"
+    "  is not billed per token and never appears here — use `tokencheck limits`\n"
+    "  and `tokencheck local` for that."
 )
 
 

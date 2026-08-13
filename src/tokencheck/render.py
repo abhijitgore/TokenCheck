@@ -440,11 +440,16 @@ def render_whoami(profile: dict[str, Any], style: Style) -> str:
 def render_setup(report: dict[str, Any], style: Style) -> str:
     """What this machine has, what it is missing, and the fix for each gap."""
     steps = report.get("steps") or []
-    done = [s for s in steps if s["done"]]
-    todo = [s for s in steps if not s["done"]]
+    # Optional steps are not gaps: an Anthropic Admin key cannot be provisioned
+    # at all on an individual account, so counting it as missing would nag
+    # forever about something the user cannot fix.
+    core = [s for s in steps if not s.get("optional")]
+    done = [s for s in core if s["done"]]
+    todo = [s for s in steps if not s["done"] and not s.get("optional")]
+    optional_todo = [s for s in steps if not s["done"] and s.get("optional")]
 
     lines = section(
-        "TokenCheck setup", style, f"{len(done)} of {len(steps)} credentials configured"
+        "TokenCheck setup", style, f"{len(done)} of {len(core)} credentials configured"
     )
     lines.append("")
 
@@ -453,13 +458,15 @@ def render_setup(report: dict[str, Any], style: Style) -> str:
         # Expired or blocked is distinct from missing: the credential exists,
         # so the fix is renewing or unlocking it, not creating a new one.
         needs_attention = step.get("expired") or step.get("blocked")
-        mark = style.yellow("!") if needs_attention else style.status(step["done"])
-        if step.get("blocked"):
-            detail = "stored, but Keychain approval pending"
-        elif step.get("expired"):
-            detail = "signed in but expired"
+        if step.get("optional") and not step["done"]:
+            mark = style.dim("–")
+        elif needs_attention:
+            mark = style.yellow("!")
         else:
-            detail = step["unlocks"]
+            mark = style.status(step["done"])
+        detail = step.get("status_detail") or (
+            "signed in but expired" if step.get("expired") else step["unlocks"]
+        )
         lines.append(f"  {mark} {step['name'].ljust(width)}   {style.dim(detail)}")
 
     if todo:
@@ -468,8 +475,8 @@ def render_setup(report: dict[str, Any], style: Style) -> str:
         for step in todo:
             lines.append("")
             suffix = ""
-            if step.get("blocked"):
-                suffix = " (stored, needs Keychain approval)"
+            if step.get("status_detail"):
+                suffix = f" — {step['status_detail']}"
             elif step.get("expired"):
                 suffix = " (expired)"
             lines.append(f"  {step['name']}{suffix}")
@@ -481,9 +488,21 @@ def render_setup(report: dict[str, Any], style: Style) -> str:
             lines.append(f"      {style.bold(step['fix'])}")
             if step.get("note"):
                 lines.append(f"      {style.dim(step['note'])}")
-    else:
+    elif not optional_todo:
         lines.append("")
         lines.append(style.green("  Everything is configured."))
+    else:
+        lines.append("")
+        lines.append(style.green("  Everything required is configured."))
+
+    if optional_todo:
+        lines.append("")
+        lines.extend(section("Optional", style))
+        for step in optional_todo:
+            lines.append("")
+            lines.append(f"  {step['name']}")
+            if step.get("note"):
+                lines.append(f"      {style.dim(step['note'])}")
 
     telemetry = report.get("telemetry") or {}
     lines.append("")
