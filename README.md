@@ -169,6 +169,20 @@ To keep the key out of `~/.zsh_history`, let zsh read it silently:
 read -rs "k?Admin key: " && security add-generic-password -a "$USER" -s anthropic_admin_key -w "$k" -A -U && unset k
 ```
 
+## Expired credentials
+
+Two different mechanisms, because the credentials differ:
+
+**OAuth tokens** (Claude, Codex, Gemini) carry an expiry timestamp locally, so
+TokenCheck knows before making a request. `auth` shows remaining life
+(`valid (expires in 4d 20h)`), any command warns when under 15 minutes remain,
+and an already-expired token is a hard error naming the command that renews it.
+
+**API keys** carry no expiry, so a 401 is the only signal that one has expired
+or been revoked. TokenCheck cannot distinguish that from a wrong-kind-of-key,
+so the rejection message covers both and gives the command to replace the
+stored copy in place.
+
 TokenCheck also checks the key's prefix and warns *before* the request when you
 have stored an ordinary API key (`sk-ant-api…`, `sk-proj…`) rather than an admin
 key — those are rejected with a bare 401 that otherwise reads like a bad key

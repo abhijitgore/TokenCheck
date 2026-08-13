@@ -67,9 +67,16 @@ def _claude_code_user_agent() -> str:
 
 
 OAUTH_REAUTH_HINT = "The credential is expired or revoked — run `claude` to re-authenticate."
+
+#: An API key carries no local expiry, so a 401 is the only signal that it has
+#: expired or been revoked. The message has to cover that as well as the
+#: wrong-kind-of-key case, since the server reports both identically.
 ADMIN_KEY_HINT = (
-    "Check the key is a current Admin API key (`sk-ant-admin…`) from "
-    "https://console.anthropic.com/settings/admin-keys."
+    "The key was rejected. It is expired, revoked, or not an Admin API key.\n"
+    "  Mint a fresh one at https://console.anthropic.com/settings/admin-keys "
+    "(it must start with `sk-ant-admin`), then replace the stored copy:\n"
+    "    security add-generic-password -a \"$USER\" -s anthropic_admin_key "
+    "-w 'sk-ant-admin...' -A -U"
 )
 
 

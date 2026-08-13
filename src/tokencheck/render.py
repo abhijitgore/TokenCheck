@@ -221,6 +221,13 @@ def render_limits(report: dict[str, Any], style: Style) -> str:
     note = report.get("note")
     if note:
         lines.append(style.dim(f"  {note}"))
+
+    # Warn while the credential still works, so a refresh can happen before the
+    # next run fails rather than after.
+    warning = report.get("expiry_warning")
+    if warning:
+        lines.append(style.yellow(f"  {warning}"))
+
     lines.append(style.dim(f"  source: {report.get('credential_source', 'unknown')}"))
     return "\n".join(lines)
 

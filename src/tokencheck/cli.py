@@ -157,6 +157,20 @@ _EXPIRED_CLAUDE = (
 )
 
 
+def _expiry_warning(credential: Any, reauth: str) -> str | None:
+    """Flag a credential that still works but is about to stop.
+
+    Better to be told to refresh while the command is succeeding than to have
+    the next one fail — this is what makes Gemini's ~1 hour tokens tolerable.
+    """
+    remaining = getattr(credential, "expires_in_seconds", None)
+    if remaining is None or remaining <= 0:
+        return None
+    if remaining > auth.EXPIRY_WARNING_SECONDS:
+        return None
+    return f"credential expires {auth.expires_in_phrase(remaining)} — {reauth}"
+
+
 def _claude_limits(include_raw: bool) -> dict[str, Any]:
     credential = auth.find_oauth_credential()
     if credential.is_expired:
@@ -170,6 +184,7 @@ def _claude_limits(include_raw: bool) -> dict[str, Any]:
         "extra_usage": api.parse_extra_usage(payload),
         "subscription_type": credential.subscription_type,
         "credential_source": credential.source,
+        "expiry_warning": _expiry_warning(credential, "run `claude` to refresh it"),
     }
     if include_raw:
         report["raw"] = payload
@@ -187,6 +202,7 @@ def _openai_limits(include_raw: bool) -> dict[str, Any]:
 
     payload = openai_api.fetch_codex_usage(credential.access_token, credential.account_id)
     report = openai_api.codex_limits_report(payload, credential_source=credential.source)
+    report["expiry_warning"] = _expiry_warning(credential, "run `codex login` to refresh it")
     if include_raw:
         report["raw"] = payload
     return report
@@ -205,6 +221,7 @@ def _gemini_limits(include_raw: bool) -> dict[str, Any]:
     quota = gemini_api.fetch_quota(credential.access_token)
     tier = gemini_api.fetch_tier(credential.access_token)
     report = gemini_api.limits_report(quota, tier, credential_source=credential.source)
+    report["expiry_warning"] = _expiry_warning(credential, "run `gemini` to refresh it")
     if include_raw:
         report["raw"] = {"quota": quota, "tier": tier}
     return report

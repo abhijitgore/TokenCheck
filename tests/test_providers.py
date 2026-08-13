@@ -497,3 +497,77 @@ class KeyKindWarning(unittest.TestCase):
         self.assertIsNone(auth.key_kind_warning("something-else", "anthropic"))
         self.assertIsNone(auth.key_kind_warning("", "anthropic"))
         self.assertIsNone(auth.key_kind_warning("sk-ant-api03", "unknown-vendor"))
+
+
+class ExpiryReporting(unittest.TestCase):
+    def _gemini(self, offset):
+        import time as _time
+
+        return auth.GeminiCredential(
+            access_token="t", source="s", expires_at=_time.time() + offset
+        )
+
+    def test_phrases(self):
+        self.assertEqual(auth.expires_in_phrase(None), "")
+        self.assertEqual(auth.expires_in_phrase(-1), "expired")
+        self.assertEqual(auth.expires_in_phrase(30), "in 1m", "sub-minute rounds up, never 0m")
+        self.assertEqual(auth.expires_in_phrase(43 * 60), "in 43m")
+        self.assertEqual(auth.expires_in_phrase(2 * 3600), "in 2h")
+        self.assertEqual(auth.expires_in_phrase(2 * 3600 + 30 * 60), "in 2h 30m")
+        self.assertEqual(auth.expires_in_phrase(3 * 86400), "in 3d")
+
+    def test_warning_only_inside_the_window(self):
+        from tokencheck import cli
+
+        self.assertIsNone(cli._expiry_warning(self._gemini(3600), "refresh"))
+        self.assertIsNotNone(cli._expiry_warning(self._gemini(10 * 60), "refresh"))
+
+    def test_already_expired_is_not_a_soft_warning(self):
+        # Expiry is a hard error on the command path; a warning would be wrong.
+        from tokencheck import cli
+
+        self.assertIsNone(cli._expiry_warning(self._gemini(-60), "refresh"))
+
+    def test_no_expiry_metadata_yields_no_warning(self):
+        from tokencheck import cli
+
+        credential = auth.OAuthCredential(access_token="t", source="s", expires_at=None)
+        self.assertIsNone(cli._expiry_warning(credential, "refresh"))
+
+    def test_detail_shows_remaining_life(self):
+        self.assertIn("expires in", auth._expiry_detail(self._gemini(3600), "refresh"))
+
+    def test_detail_nags_when_close(self):
+        detail = auth._expiry_detail(self._gemini(5 * 60), "run `gemini`")
+        self.assertIn("run `gemini`", detail)
+        self.assertNotIn("valid", detail)
+
+    def test_detail_reports_expired(self):
+        self.assertTrue(auth._expiry_detail(self._gemini(-1), "run `gemini`").startswith("expired"))
+
+    def test_every_credential_type_exposes_remaining_life(self):
+        for credential in (
+            auth.OAuthCredential(access_token="t", source="s", expires_at=1),
+            auth.CodexCredential(access_token="t", source="s", expires_at=1),
+            auth.GeminiCredential(access_token="t", source="s", expires_at=1),
+        ):
+            self.assertIsNotNone(credential.expires_in_seconds, type(credential).__name__)
+            self.assertTrue(credential.is_expired)
+
+    def test_rejected_api_key_message_says_expired_or_revoked(self):
+        from tokencheck import api, openai_api
+
+        for hint in (api.ADMIN_KEY_HINT, openai_api.ADMIN_KEY_HINT):
+            self.assertIn("expired", hint)
+            self.assertIn("revoked", hint)
+            # and tells you how to replace the stored copy
+            self.assertIn("add-generic-password", hint)
+
+    def test_warning_reaches_the_rendered_report(self):
+        report = {
+            "title": "T",
+            "windows": [{"label": "w", "utilization": 1.0, "resets_at": None}],
+            "credential_source": "s",
+            "expiry_warning": "credential expires in 3m — run `gemini`",
+        }
+        self.assertIn("expires in 3m", render.render_limits(report, render.Style(False)))

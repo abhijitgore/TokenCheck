@@ -29,10 +29,13 @@ ORG_USAGE_URL = "https://api.openai.com/v1/organization/usage/completions"
 ORG_COSTS_URL = "https://api.openai.com/v1/organization/costs"
 
 CODEX_REAUTH_HINT = "The Codex credential is expired or revoked — run `codex login`."
+#: As on the Anthropic side, a 401 is the only signal an API key has expired or
+#: been revoked — the server does not distinguish that from the wrong key kind.
 ADMIN_KEY_HINT = (
-    "The Usage API needs an OpenAI **admin** key (`sk-admin-…`) from "
-    "https://platform.openai.com/settings/organization/admin-keys — a regular "
-    "`sk-proj-…` key is not authorized for it."
+    "The key was rejected. It is expired, revoked, or not an admin key.\n"
+    "  Mint a fresh one at https://platform.openai.com/settings/organization/admin-keys "
+    "(it must start with `sk-admin`, not `sk-proj`), then replace the stored copy:\n"
+    "    security add-generic-password -a \"$USER\" -s openai_admin_key -w 'sk-admin...' -A -U"
 )
 
 #: `/v1/organization/costs` only buckets by day, unlike the usage endpoint.

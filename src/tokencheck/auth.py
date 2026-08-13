@@ -151,6 +151,27 @@ class KeychainBlocked(AuthError):
     """The item exists but macOS is gating it behind an approval dialog."""
 
 
+def expires_in_phrase(seconds: float | None) -> str:
+    """"in 43m" / "in 2d 3h" / "" — how long a credential has left."""
+    if seconds is None:
+        return ""
+    if seconds <= 0:
+        return "expired"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"in {max(1, minutes)}m"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"in {hours}h {minutes}m" if minutes else f"in {hours}h"
+    days, hours = divmod(hours, 24)
+    return f"in {days}d {hours}h" if hours else f"in {days}d"
+
+
+def rotate_command(service: str, placeholder: str) -> str:
+    """The command that replaces a stored key in place."""
+    return f"security add-generic-password -a \"$USER\" -s {service} -w '{placeholder}' -A -U"
+
+
 @functools.lru_cache(maxsize=None)
 def keychain_secret(service: str) -> str | None:
     """Read a generic-password item from the macOS login Keychain.
@@ -286,6 +307,10 @@ class CodexCredential:
     @property
     def is_expired(self) -> bool:
         return self.expires_at is not None and self.expires_at <= time.time()
+
+    @property
+    def expires_in_seconds(self) -> float | None:
+        return None if self.expires_at is None else self.expires_at - time.time()
 
     def identity_claims(self) -> dict[str, Any]:
         """Account details carried in the id_token.
@@ -428,6 +453,10 @@ class GeminiCredential:
     def is_expired(self) -> bool:
         return self.expires_at is not None and self.expires_at <= time.time()
 
+    @property
+    def expires_in_seconds(self) -> float | None:
+        return None if self.expires_at is None else self.expires_at - time.time()
+
 
 def gemini_config_dir() -> Path:
     raw = os.environ.get(GEMINI_HOME_ENV, "").strip()
@@ -474,10 +503,23 @@ def find_gemini_credential() -> GeminiCredential:
 # --------------------------------------------------------------------------
 
 
+#: Below this, a credential is close enough to expiry to say so up front.
+EXPIRY_WARNING_SECONDS = 15 * 60
+
+
 def _expiry_detail(credential: Any, reauth: str) -> str:
+    """"valid (expires in 43m)" / "expires in 4m — <reauth>" / "expired — <reauth>"."""
     if credential is None:
         return "not found"
-    return f"expired — {reauth}" if credential.is_expired else "valid"
+    if credential.is_expired:
+        return f"expired — {reauth}"
+    remaining = getattr(credential, "expires_in_seconds", None)
+    if remaining is None:
+        return "valid"
+    phrase = expires_in_phrase(remaining)
+    if remaining <= EXPIRY_WARNING_SECONDS:
+        return f"expires {phrase} — {reauth}"
+    return f"valid (expires {phrase})"
 
 
 def _credential_row(

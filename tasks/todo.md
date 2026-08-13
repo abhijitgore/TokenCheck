@@ -273,3 +273,20 @@ confirmed readable from a separate process by round-trip probe.
 Still unverified live: both admin usage paths. The keys now in the Keychain are
 `sk-ant-api03…` and `sk-proj-…` — ordinary API keys, not admin keys — so they
 cannot authorize the usage endpoints regardless of the Keychain issue.
+
+## Round 5b — expiry detection and refresh prompts
+
+- [x] `auth` shows remaining life, not just valid/expired
+- [x] Commands warn when a credential expires within 15 minutes, while it works
+- [x] API-key 401s say "expired, revoked, or not an admin key" and give the
+      in-place replacement command
+
+**Two mechanisms, because the credentials differ.** OAuth tokens carry a local
+expiry, so expiry is known *before* the request: reported as remaining life, a
+soft warning under 15 minutes, and a hard error once past. API keys carry no
+expiry at all — a 401 is the only signal — and the server does not distinguish
+expired from revoked from wrong-kind, so one message covers all three.
+
+**Already-expired is not a soft warning.** `_expiry_warning` returns None for a
+credential in the past: that path is a hard error, and emitting both would
+double-report it.
