@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tokencheck"
+version = "0.1.0"
+description = "CLI for Claude, OpenAI and Gemini token usage, rate-limit utilization and reset times"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = []
+
+[project.scripts]
+tokencheck = "tokencheck.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tokencheck"]

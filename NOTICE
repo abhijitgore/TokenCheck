@@ -1,0 +1,20 @@
+TokenCheck
+==========
+
+This project derives protocol knowledge — API endpoints, request headers,
+credential storage locations and JSON response shapes for Anthropic's Claude
+usage endpoints — from CodexBar.
+
+    CodexBar
+    https://github.com/steipete/CodexBar
+    Copyright (c) 2026 Peter Steinberger
+    Licensed under the MIT License
+
+The full MIT license text as distributed with CodexBar is reproduced in
+`third_party/CodexBar-LICENSE`, satisfying the license's requirement that the
+copyright and permission notice be included in copies or substantial portions
+of the software. The MIT License permits commercial use, modification and
+redistribution on that condition.
+
+No CodexBar source code is copied verbatim into this repository; TokenCheck is
+an independent Python implementation.
