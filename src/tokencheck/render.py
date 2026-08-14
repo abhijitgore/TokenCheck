@@ -180,8 +180,8 @@ def _visible_len(text: str) -> int:
 def render_limits(report: dict[str, Any], style: Style) -> str:
     """Render one provider's rate-limit windows.
 
-    Shared by Claude, ChatGPT/Codex and Gemini — each supplies its own `title`
-    and a list of `windows` normalized to percent-used plus a reset time.
+    Shared by Claude and ChatGPT/Codex — each supplies its own `title` and a
+    list of `windows` normalized to percent-used plus a reset time.
     """
     header = report.get("title") or "Claude subscription limits"
     plan = report.get("subscription_type")
@@ -383,7 +383,7 @@ def _bucket_label(bucket: dict[str, Any], hourly: bool) -> str:
     return moment.astimezone().strftime("%b %-d %H:%M")
 
 
-PROVIDER_NAMES = {"claude": "Claude", "openai": "ChatGPT / Codex", "gemini": "Gemini"}
+PROVIDER_NAMES = {"claude": "Claude", "openai": "ChatGPT / Codex"}
 
 
 def render_provider_error(provider: str, message: str, style: Style, suffix: str = "") -> str:

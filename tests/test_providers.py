@@ -1,6 +1,6 @@
-"""Period parsing, and the OpenAI/Gemini provider parsers.
+"""Period parsing, and the OpenAI provider parsers.
 
-The Codex and Gemini fixtures are real payloads captured from those endpoints,
+The Codex fixtures are real payloads captured from that endpoint,
 trimmed of identifying values. The OpenAI admin-usage path has no credential on
 any dev machine here, so its bucket merging is pinned by fixture only.
 """
@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tokencheck import auth, gemini_api, openai_api, period, render  # noqa: E402
+from tokencheck import auth, cli, openai_api, period, render  # noqa: E402
 
 
 def setUpModule():
@@ -215,71 +215,6 @@ class OpenAIOrgUsageMerging(unittest.TestCase):
         json.dumps(self.merged(), default=str)
 
 
-class GeminiParsing(unittest.TestCase):
-    # A real `retrieveUserQuota` response.
-    quota = {
-        "buckets": [
-            {
-                "resetTime": "2026-08-14T22:01:34Z",
-                "tokenType": "REQUESTS",
-                "modelId": "gemini-2.5-pro",
-                "remainingFraction": 0.25,
-            },
-            {
-                "resetTime": "2026-08-14T22:01:34Z",
-                "tokenType": "REQUESTS",
-                "modelId": "gemini-2.5-flash",
-                "remainingFraction": 1,
-            },
-        ]
-    }
-
-    def test_remaining_fraction_is_inverted_to_used_percent(self):
-        windows = gemini_api.parse_quota_windows(self.quota)
-        used = {w["label"]: w["utilization"] for w in windows}
-        self.assertAlmostEqual(used["gemini-2.5-pro"], 75.0)
-        self.assertAlmostEqual(used["gemini-2.5-flash"], 0.0)
-
-    def test_sorted_most_used_first(self):
-        self.assertEqual(gemini_api.parse_quota_windows(self.quota)[0]["label"], "gemini-2.5-pro")
-
-    def test_out_of_range_fraction_is_clamped(self):
-        odd = {"buckets": [{"modelId": "m", "remainingFraction": 1.4}, {"modelId": "n", "remainingFraction": -2}]}
-        used = sorted(w["utilization"] for w in gemini_api.parse_quota_windows(odd))
-        self.assertEqual(used, [0.0, 100.0])
-
-    def test_non_request_token_type_is_labelled(self):
-        payload = {"buckets": [{"modelId": "m", "tokenType": "INPUT_TOKENS", "remainingFraction": 0.5}]}
-        self.assertEqual(gemini_api.parse_quota_windows(payload)[0]["label"], "m (input_tokens)")
-
-    def test_tier_falls_back_to_default_allowed_tier(self):
-        tier = gemini_api.parse_tier(
-            {
-                "allowedTiers": [{"id": "standard-tier", "name": "Gemini Code Assist", "isDefault": True}],
-                "ineligibleTiers": [
-                    {"tierId": "free-tier", "tierName": "For individuals", "reasonMessage": "unsupported client"}
-                ],
-            }
-        )
-        self.assertEqual(tier["tier_name"], "Gemini Code Assist")
-        self.assertEqual(tier["ineligible"][0]["reason"], "unsupported client")
-
-    def test_current_tier_wins_when_present(self):
-        tier = gemini_api.parse_tier(
-            {"currentTier": {"id": "paid", "name": "Paid"}, "allowedTiers": [{"id": "x", "name": "X"}]}
-        )
-        self.assertEqual(tier["tier_name"], "Paid")
-
-    def test_missing_tier_is_not_fatal(self):
-        report = gemini_api.limits_report(self.quota, None, credential_source="test")
-        self.assertIsNone(report["subscription_type"])
-        self.assertIn("Gemini quota", render.render_limits(report, render.Style(False)))
-
-    def test_no_buckets_renders_without_crashing(self):
-        report = gemini_api.limits_report({}, None, credential_source="test")
-        self.assertIn("No rate-limit windows", render.render_limits(report, render.Style(False)))
-
-
 class ProviderCredentials(unittest.TestCase):
     def test_jwt_expiry_is_read_without_verification(self):
         import base64
@@ -293,7 +228,7 @@ class ProviderCredentials(unittest.TestCase):
 
     def test_describe_sources_covers_every_provider(self):
         providers = {row["provider"] for row in auth.describe_sources()}
-        self.assertEqual(providers, {"claude", "openai", "gemini"})
+        self.assertEqual(providers, {"claude", "openai"})
 
     def test_describe_sources_never_leaks_a_secret(self):
         blob = json.dumps(auth.describe_sources())
@@ -357,17 +292,6 @@ class Identity(unittest.TestCase):
 
     def test_no_id_token_yields_empty_claims(self):
         self.assertEqual(auth.CodexCredential(access_token="a", source="t").identity_claims(), {})
-
-    def test_gemini_identity(self):
-        profile = gemini_api.identity(
-            {"email": "g@example.com", "name": "G User", "sub": "123"},
-            {"allowedTiers": [{"id": "standard-tier", "name": "Code Assist", "isDefault": True}]},
-            credential_source="test",
-        )
-        self.assertEqual(profile["email"], "g@example.com")
-        self.assertEqual(profile["name"], "G User")
-        self.assertEqual(profile["subscription_type"], "Code Assist")
-        self.assertIn("Gemini account", render.render_whoami(profile, render.Style(False)))
 
     def test_whoami_skips_absent_fields(self):
         text = render.render_whoami({"title": "T", "email": "a@b.c"}, render.Style(False))
@@ -500,10 +424,10 @@ class KeyKindWarning(unittest.TestCase):
 
 
 class ExpiryReporting(unittest.TestCase):
-    def _gemini(self, offset):
+    def _codex(self, offset):
         import time as _time
 
-        return auth.GeminiCredential(
+        return auth.CodexCredential(
             access_token="t", source="s", expires_at=_time.time() + offset
         )
 
@@ -519,14 +443,14 @@ class ExpiryReporting(unittest.TestCase):
     def test_warning_only_inside_the_window(self):
         from tokencheck import cli
 
-        self.assertIsNone(cli._expiry_warning(self._gemini(3600), "refresh"))
-        self.assertIsNotNone(cli._expiry_warning(self._gemini(10 * 60), "refresh"))
+        self.assertIsNone(cli._expiry_warning(self._codex(3600), "refresh"))
+        self.assertIsNotNone(cli._expiry_warning(self._codex(10 * 60), "refresh"))
 
     def test_already_expired_is_not_a_soft_warning(self):
         # Expiry is a hard error on the command path; a warning would be wrong.
         from tokencheck import cli
 
-        self.assertIsNone(cli._expiry_warning(self._gemini(-60), "refresh"))
+        self.assertIsNone(cli._expiry_warning(self._codex(-60), "refresh"))
 
     def test_no_expiry_metadata_yields_no_warning(self):
         from tokencheck import cli
@@ -535,21 +459,20 @@ class ExpiryReporting(unittest.TestCase):
         self.assertIsNone(cli._expiry_warning(credential, "refresh"))
 
     def test_detail_shows_remaining_life(self):
-        self.assertIn("expires in", auth._expiry_detail(self._gemini(3600), "refresh"))
+        self.assertIn("expires in", auth._expiry_detail(self._codex(3600), "refresh"))
 
     def test_detail_nags_when_close(self):
-        detail = auth._expiry_detail(self._gemini(5 * 60), "run `gemini`")
-        self.assertIn("run `gemini`", detail)
+        detail = auth._expiry_detail(self._codex(5 * 60), "run `codex login`")
+        self.assertIn("run `codex login`", detail)
         self.assertNotIn("valid", detail)
 
     def test_detail_reports_expired(self):
-        self.assertTrue(auth._expiry_detail(self._gemini(-1), "run `gemini`").startswith("expired"))
+        self.assertTrue(auth._expiry_detail(self._codex(-1), "run `codex login`").startswith("expired"))
 
     def test_every_credential_type_exposes_remaining_life(self):
         for credential in (
             auth.OAuthCredential(access_token="t", source="s", expires_at=1),
             auth.CodexCredential(access_token="t", source="s", expires_at=1),
-            auth.GeminiCredential(access_token="t", source="s", expires_at=1),
         ):
             self.assertIsNotNone(credential.expires_in_seconds, type(credential).__name__)
             self.assertTrue(credential.is_expired)
@@ -573,7 +496,7 @@ class ExpiryReporting(unittest.TestCase):
             "title": "T",
             "windows": [{"label": "w", "utilization": 1.0, "resets_at": None}],
             "credential_source": "s",
-            "expiry_warning": "credential expires in 3m — run `gemini`",
+            "expiry_warning": "credential expires in 3m — run `codex login`",
         }
         self.assertIn("expires in 3m", render.render_limits(report, render.Style(False)))
 
@@ -659,3 +582,51 @@ class AccountClassification(unittest.TestCase):
         # and points at the commands that do work on this account
         self.assertIn("tokencheck limits", usage_notice)
         self.assertIn("tokencheck local", usage_notice)
+
+
+class ProviderSelection(unittest.TestCase):
+    """`--provider` before or after the subcommand, and each command's default."""
+
+    def _args(self, argv):
+        return cli._build_parser().parse_args(argv)
+
+    def test_gemini_is_no_longer_a_choice(self):
+        self.assertEqual(cli.PROVIDERS, ("claude", "openai", "all"))
+        for command in (cli._LIMIT_PROVIDERS, cli._WHOAMI_PROVIDERS):
+            self.assertNotIn("gemini", command)
+
+    def test_limits_and_whoami_default_to_every_provider(self):
+        for command in ("limits", "whoami"):
+            self.assertEqual(cli._provider(self._args([command]), "all"), "all")
+
+    def test_bare_invocation_defaults_to_every_provider(self):
+        self.assertEqual(cli._provider(self._args([]), "all"), "all")
+
+    def test_flag_is_accepted_on_either_side_of_the_subcommand(self):
+        for argv in (["limits", "-p", "openai"], ["-p", "openai", "limits"], ["--provider", "openai"]):
+            self.assertEqual(cli._provider(self._args(argv), "all"), "openai", argv)
+
+    def test_subcommand_absent_flag_does_not_clobber_the_global_one(self):
+        # The subparser copy suppresses its default, so `-p openai limits`
+        # survives `limits` contributing nothing.
+        self.assertEqual(cli._provider(self._args(["-p", "openai", "limits"]), "all"), "openai")
+
+    def test_usage_defaults_to_claude_not_all(self):
+        # An admin-key report against one organization has nothing to merge, and
+        # the claude branch prints the individual-account notice.
+        self.assertEqual(cli._provider(self._args(["usage"]), "claude"), "claude")
+
+    def test_usage_rejects_an_explicit_all(self):
+        import contextlib
+        import io
+
+        args = self._args(["usage", "-p", "all"])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertEqual(cli._cmd_usage(args, render.Style(False)), cli.EXIT_ERROR)
+        self.assertIn("one provider at a time", stderr.getvalue())
+
+    def test_provider_flag_appears_in_top_level_help(self):
+        text = cli._build_parser().format_help()
+        self.assertIn("--provider", text)
+        self.assertIn("default: all", text)

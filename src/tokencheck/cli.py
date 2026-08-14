@@ -14,7 +14,6 @@ from . import (
     api,
     auth,
     claudeconfig,
-    gemini_api,
     openai_api,
     otlp,
     period,
@@ -26,11 +25,45 @@ EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_AUTH = 2
 
+PROVIDERS = ("claude", "openai", "all")
+
+_PROVIDER_HELP = (
+    "which provider to report: claude, openai or all "
+    "(default: all — every one you are signed in to; `usage` defaults to claude)"
+)
+
+
+def _add_provider_flag(parser: argparse.ArgumentParser, *, shadow: bool) -> None:
+    """Accept `--provider` before *and* after the subcommand.
+
+    The flag lives on the top-level parser so `tokencheck --help` shows it, and
+    is repeated on each subparser that honours it so `tokencheck limits -p
+    openai` reads naturally. Only the *default* is suppressed on the subparser
+    copy — that is what stops an absent flag there from overwriting one given
+    before the subcommand. The help text stays, so `tokencheck limits --help`
+    documents the flag it accepts.
+    """
+    parser.add_argument(
+        "--provider",
+        "-p",
+        choices=PROVIDERS,
+        default=argparse.SUPPRESS if shadow else None,
+        help=_PROVIDER_HELP,
+    )
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tokencheck",
-        description="Report token usage, rate-limit utilization and reset times for Claude, OpenAI and Gemini.",
+        description="Report token usage, rate-limit utilization and reset times for Claude and OpenAI.",
+        epilog=(
+            "examples:\n"
+            "  tokencheck                     rate limits for every provider you are signed in to\n"
+            "  tokencheck -p openai           just ChatGPT / Codex\n"
+            "  tokencheck local --period 7d   local Claude Code token totals for the last week\n"
+            "  tokencheck setup               what this machine still needs\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"tokencheck {__version__}")
     parser.add_argument("--json", action="store_true", help="emit JSON instead of a table")
@@ -40,6 +73,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="show what this machine still needs to report every provider",
     )
+    _add_provider_flag(parser, shadow=False)
 
     sub = parser.add_subparsers(dest="command")
 
@@ -47,37 +81,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "limits",
         help="subscription rate-limit windows, utilization and reset times (default)",
     )
-    limits.add_argument(
-        "--provider",
-        "-p",
-        choices=("claude", "openai", "gemini", "all"),
-        default="claude",
-        help="which provider to report (default: claude; `all` reports every one you have credentials for)",
-    )
+    _add_provider_flag(limits, shadow=True)
     limits.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     limits.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
     usage = sub.add_parser("usage", help="org-wide token counts and cost (needs an Admin API key)")
-    usage.add_argument(
-        "--provider",
-        "-p",
-        choices=("claude", "openai"),
-        default="claude",
-        help="which provider's usage report to fetch (Gemini publishes no token-count API)",
-    )
+    _add_provider_flag(usage, shadow=True)
     usage.add_argument("--daily", action="store_true", help="include the per-bucket breakdown")
     usage.add_argument("--admin-key", help="admin key for the chosen provider (else the env var)")
     usage.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     usage.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
     whoami = sub.add_parser("whoami", help="which account each credential belongs to")
-    whoami.add_argument(
-        "--provider",
-        "-p",
-        choices=("claude", "openai", "gemini", "all"),
-        default="claude",
-        help="which provider's account to report (default: claude)",
-    )
+    _add_provider_flag(whoami, shadow=True)
     whoami.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     whoami.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
 
@@ -162,7 +178,7 @@ def _expiry_warning(credential: Any, reauth: str) -> str | None:
     """Flag a credential that still works but is about to stop.
 
     Better to be told to refresh while the command is succeeding than to have
-    the next one fail — this is what makes Gemini's ~1 hour tokens tolerable.
+    the next one fail.
     """
     remaining = getattr(credential, "expires_in_seconds", None)
     if remaining is None or remaining <= 0:
@@ -209,30 +225,20 @@ def _openai_limits(include_raw: bool) -> dict[str, Any]:
     return report
 
 
-def _gemini_limits(include_raw: bool) -> dict[str, Any]:
-    credential = auth.find_gemini_credential()
-    if credential.is_expired:
-        raise auth.AuthError(
-            "Gemini access token has expired.\n"
-            "Google issues these with a ~1 hour lifetime, so this is expected unless you\n"
-            "have used Gemini recently. Run `gemini` (or open Antigravity) to refresh\n"
-            "~/.gemini/oauth_creds.json, then try again."
-        )
-
-    quota = gemini_api.fetch_quota(credential.access_token)
-    tier = gemini_api.fetch_tier(credential.access_token)
-    report = gemini_api.limits_report(quota, tier, credential_source=credential.source)
-    report["expiry_warning"] = _expiry_warning(credential, "run `gemini` to refresh it")
-    if include_raw:
-        report["raw"] = {"quota": quota, "tier": tier}
-    return report
-
-
 _LIMIT_PROVIDERS = {
     "claude": _claude_limits,
     "openai": _openai_limits,
-    "gemini": _gemini_limits,
 }
+
+
+def _provider(args: argparse.Namespace, default: str) -> str:
+    """The chosen provider, or this command's default if none was given.
+
+    `--provider` defaults to `None` rather than to a provider name, so that
+    "the user asked for everything" stays distinguishable from "the user asked
+    for nothing" — `usage` needs that difference.
+    """
+    return getattr(args, "provider", None) or default
 
 
 def _per_provider(
@@ -276,13 +282,21 @@ def _per_provider(
 
 def _cmd_limits(args: argparse.Namespace, style: render.Style) -> int:
     return _per_provider(
-        args, style, _LIMIT_PROVIDERS, render.render_limits, getattr(args, "provider", "claude"), "limits"
+        args, style, _LIMIT_PROVIDERS, render.render_limits, _provider(args, "all"), "limits"
     )
 
 
 def _cmd_usage(args: argparse.Namespace, style: render.Style) -> int:
     window = period.from_args(getattr(args, "period", None), getattr(args, "days", None))
-    provider = getattr(args, "provider", "claude")
+    # Unlike `limits`, this is a paid admin-key report against one organization;
+    # there is nothing sensible to merge across providers, so it takes one.
+    provider = _provider(args, "claude")
+    if provider == "all":
+        print(
+            "`usage` reports one provider at a time — pass `-p claude` or `-p openai`.",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
 
     # Anthropic's Admin API is unavailable for individual accounts, so this can
     # only fail — say why and point at the commands that do cover this account,
@@ -359,33 +373,15 @@ def _openai_whoami(include_raw: bool) -> dict[str, Any]:
     return profile
 
 
-def _gemini_whoami(include_raw: bool) -> dict[str, Any]:
-    credential = auth.find_gemini_credential()
-    if credential.is_expired:
-        raise auth.AuthError(
-            "Gemini access token has expired.\n"
-            "Google issues these with a ~1 hour lifetime. Run `gemini` (or open\n"
-            "Antigravity) to refresh it, then try again."
-        )
-
-    userinfo = gemini_api.fetch_userinfo(credential.access_token)
-    tier = gemini_api.fetch_tier(credential.access_token)
-    profile = gemini_api.identity(userinfo, tier, credential_source=credential.source)
-    if include_raw:
-        profile["raw"] = {"userinfo": userinfo, "tier": tier}
-    return profile
-
-
 _WHOAMI_PROVIDERS = {
     "claude": _claude_whoami,
     "openai": _openai_whoami,
-    "gemini": _gemini_whoami,
 }
 
 
 def _cmd_whoami(args: argparse.Namespace, style: render.Style) -> int:
     return _per_provider(
-        args, style, _WHOAMI_PROVIDERS, render.render_whoami, getattr(args, "provider", "claude"), "account"
+        args, style, _WHOAMI_PROVIDERS, render.render_whoami, _provider(args, "all"), "account"
     )
 
 
@@ -411,13 +407,6 @@ _SETUP_STEPS: list[dict[str, Any]] = [
         "unlocks": "tokencheck limits -p openai, whoami -p openai",
         "fix": "codex login",
         "note": "install the Codex CLI first if `codex` is not on PATH",
-    },
-    {
-        "provider": "gemini",
-        "name": "Gemini",
-        "unlocks": "tokencheck limits -p gemini, whoami -p gemini",
-        "fix": "gemini   # or sign in via Antigravity",
-        "note": "writes ~/.gemini/oauth_creds.json",
     },
     {
         "provider": "claude",

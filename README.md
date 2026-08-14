@@ -3,8 +3,8 @@
 A zero-dependency CLI that captures **every channel of telemetry Claude emits** —
 subscription limits, local token consumption, plan and quota tier, and the
 OpenTelemetry stream Claude Code exports — and explains each figure alongside it.
-Rate limits and usage for **OpenAI (ChatGPT/Codex)** and **Gemini** are reported
-too, from the same command.
+Rate limits and usage for **OpenAI (ChatGPT/Codex)** are reported too, from the
+same command.
 
 ```
 $ tokencheck local
@@ -61,7 +61,7 @@ PYTHONPATH=src python3 -m tokencheck
 
 | Command | What it reports | Auth |
 | --- | --- | --- |
-| `tokencheck limits` (default) | Rate-limit windows, utilization and reset times — for Claude, ChatGPT/Codex or Gemini | OAuth |
+| `tokencheck limits` (default) | Rate-limit windows, utilization and reset times — for Claude and ChatGPT/Codex | OAuth |
 | `tokencheck local` | Token consumption from local transcripts — by day, model, project, session, MCP tool, skill, effort or version | — |
 | `tokencheck plan` | Subscription product, rate-limit tier, org role, extra-usage state, first-token date, live windows, tool/skill counters | OAuth |
 | `tokencheck collect` | Runs an OTLP receiver capturing what Claude Code emits | — |
@@ -72,8 +72,9 @@ PYTHONPATH=src python3 -m tokencheck
 | `tokencheck setup` | What this machine still needs, and the command for each gap | — |
 | `tokencheck auth` | Which credential sources are present (no secrets printed) | — |
 
-Every command takes `--json` and `--no-color`. `local` also takes
-`--by <dimension>` and `--project <substring>`.
+Every command takes `--json` and `--no-color`. `limits`, `whoami` and `usage`
+take `--provider`/`-p`, accepted either before or after the subcommand. `local`
+also takes `--by <dimension>` and `--project <substring>`.
 
 Exit codes: `0` success, `1` error, `2` auth problem.
 
@@ -101,12 +102,15 @@ period the cost figure covers the calendar day so far and is labelled
 
 ## Providers
 
-`tokencheck limits --provider claude|openai|gemini|all` (default `claude`).
-With `all`, a provider you have no credentials for is reported in place rather
-than failing the run.
+`tokencheck limits --provider claude|openai|all` — **the default is `all`**, so a
+bare `tokencheck` reports every provider you are signed in to. One you have no
+credentials for is reported in place rather than failing the run.
+
+The flag works on either side of the subcommand: `tokencheck -p openai` and
+`tokencheck limits -p openai` are the same command.
 
 ```
-$ tokencheck limits --provider all
+$ tokencheck
 Claude subscription limits  (max)
 
   5-hour session      █░░░░░░░░░░░░░░░░░░░░░░░   4.0%  resets in 1h 41m (Aug 13, 4:49 PM)
@@ -116,35 +120,41 @@ ChatGPT / Codex limits  (plus)
   someone@example.com
 
   primary (7-day)  ░░░░░░░░░░░░░░░░░░░░░░░░   0.0%  resets in 6d 23h (Aug 20, 3:08 PM)
-
-Gemini quota  (Gemini Code Assist)
-
-  gemini-2.5-pro         ░░░░░░░░░░░░░░░░░░░░░░░░   0.0%  resets in 23h 59m (Aug 14, 3:08 PM)
-  gemini-2.5-flash       ░░░░░░░░░░░░░░░░░░░░░░░░   0.0%  resets in 23h 59m (Aug 14, 3:08 PM)
 ```
 
-`whoami` takes the same `--provider`, reporting the account behind each
-credential — email, plan, organization and role.
+`whoami` takes the same `--provider` and the same `all` default, reporting the
+account behind each credential — email, plan, organization and role.
 
 `tokencheck usage --provider claude|openai` fetches org-wide token counts and
-cost. **It reports API billing only.** Claude Pro/Max and ChatGPT Plus/Pro
+cost. **It defaults to `claude` rather than `all`**: it is an admin-key report
+against a single organization, so there is nothing sensible to merge across
+providers, and `-p all` is rejected rather than guessed at.
+
+**`usage` reports API billing only.** Claude Pro/Max and ChatGPT Plus/Pro
 subscription usage is not billed per token and never appears in these reports —
 `limits` and `local` are the commands that cover subscription consumption. On an
-individual Anthropic account `usage` cannot be used at all (see below). **Gemini has no `usage` mode**, and this is a limit of the platform rather
-than an omission: Google publishes no API returning token counts or spend for a
-Gemini account. Quota-remaining per model is the whole picture Gemini offers, so
-`--period` does not apply to it either.
+individual Anthropic account `usage` cannot be used at all (see below).
 
 What each provider reports:
 
-| | Claude | OpenAI | Gemini |
-| --- | --- | --- | --- |
-| Rate-limit windows + reset | ✓ | ✓ | ✓ (per model) |
-| Utilization as % used | ✓ | ✓ | ✓ (inverted from remaining) |
-| Plan / tier | ✓ | ✓ | ✓ |
-| Token counts by model | ✓ admin key | ✓ admin key | **not offered** |
-| Cost | ✓ admin key | ✓ admin key | **not offered** |
-| Cache-write tokens | ✓ | not reported by the API | — |
+| | Claude | OpenAI |
+| --- | --- | --- |
+| Rate-limit windows + reset | ✓ | ✓ |
+| Utilization as % used | ✓ | ✓ |
+| Plan / tier | ✓ | ✓ |
+| Token counts by model | ✓ admin key | ✓ admin key |
+| Cost | ✓ admin key | ✓ admin key |
+| Cache-write tokens | ✓ | not reported by the API |
+
+### Gemini was removed
+
+TokenCheck reported Gemini Code Assist quota until August 2026, via the private
+`cloudcode-pa.googleapis.com` endpoints the Gemini CLI uses. Google has since
+retired that client — the endpoint now answers with *"This client is no longer
+supported for Gemini Code Assist for individuals"* and points at Antigravity —
+and the provider offered no token-count or cost API to fall back on. It was
+dropped rather than left to decay. `git log -- src/tokencheck/gemini_api.py` has
+the implementation if it is ever worth reviving.
 
 ## Account type
 
@@ -194,7 +204,7 @@ read -rs "k?Admin key: " && security add-generic-password -a "$USER" -s anthropi
 
 Two different mechanisms, because the credentials differ:
 
-**OAuth tokens** (Claude, Codex, Gemini) carry an expiry timestamp locally, so
+**OAuth tokens** (Claude, Codex) carry an expiry timestamp locally, so
 TokenCheck knows before making a request. `auth` shows remaining life
 (`valid (expires in 4d 20h)`), any command warns when under 15 minutes remain,
 and an already-expired token is a hard error naming the command that renews it.
@@ -218,23 +228,28 @@ runs an installer or a login flow.
 ```
 $ tokencheck setup
 TokenCheck setup
-─────────────────
-  2 of 5 credentials configured
+────────────────────────
+  2 of 2 credentials configured
 
   ✓ Claude subscription   tokencheck limits, plan, whoami
   ✓ ChatGPT / Codex       tokencheck limits -p openai, whoami -p openai
-  ! Gemini                signed in but expired
-  · Anthropic admin key   tokencheck usage
-  · OpenAI admin key      tokencheck usage -p openai
+  – Anthropic admin key   This looks like a regular API key (`sk-ant-api…`), not an admin key (`sk-ant-admin…`). The usage endpoints will reject it.
+  – OpenAI admin key      This looks like a regular API key (`sk-proj…`), not an admin key (`sk-admin…`). The usage endpoints will reject it.
+
+  Everything required is configured.
+
+Optional
+────────────────────────
+
+  Anthropic admin key
+      requires a Console organization — the Admin API is unavailable for
+      individual accounts. Covers API usage only, not Pro/Max subscription usage
 ```
 
-`!` distinguishes a credential that exists but has expired from one that was
-never set up — different problems, different fixes.
-
-**Gemini expires hourly.** Google issues these access tokens with a ~1 hour
-lifetime, so unless you have used Gemini recently, `limits -p gemini` will
-report the token expired. That is expected, not a fault. TokenCheck does not
-refresh it — see the no-refresh policy below.
+Four markers, four different situations: `✓` configured, `!` present but
+expired, `·` never set up, `–` optional and therefore not counted against the
+tally. The admin keys are optional because `usage` is the only command that
+needs them, and `usage` covers API billing rather than subscription usage.
 
 ## Local usage — why deduplication is the whole game
 
@@ -302,7 +317,7 @@ TokenCheck covers one provider deeply. Verified against CodexBar `main`:
 
 | | CodexBar | TokenCheck |
 | --- | --- | --- |
-| Providers | ~69 | Claude, OpenAI, Gemini |
+| Providers | ~69 | Claude, OpenAI |
 | OTLP telemetry capture | **none** — zero OpenTelemetry sources in the repo | receiver + renderer |
 | Tool decisions, API errors, lines of code, commits, active time | not available | captured |
 | Local transcript scan | day × model | day, model, project, session, MCP tool, skill, effort, version, subagent |
@@ -351,10 +366,7 @@ resolved from
 `--admin-key`, then `$OPENAI_ADMIN_KEY`, then `$OPENAI_API_KEY`, then the
 Keychain item `openai_admin_key`.
 
-**Gemini.** Reads `~/.gemini/oauth_creds.json` (`$GEMINI_CONFIG_DIR`
-respected), written when you sign in with the Gemini CLI or Antigravity.
-
-The same no-refresh policy applies to all three: TokenCheck reads access tokens
+The same no-refresh policy applies to both: TokenCheck reads access tokens
 and never redeems a stored refresh token, because rotating it would invalidate
 the session the owning CLI is holding. An expired token is reported as expired,
 naming the command that renews it.
@@ -377,8 +389,6 @@ under `~/.claude`.
 | `GET chatgpt.com/backend-api/wham/usage` | ChatGPT/Codex plan and rate-limit windows. Bearer token from `~/.codex/auth.json`, with a `ChatGPT-Account-Id` header. |
 | `GET api.openai.com/v1/organization/usage/completions` | OpenAI token counts, grouped by model. Buckets by `1m`/`1h`/`1d`. |
 | `GET api.openai.com/v1/organization/costs` | OpenAI spend, grouped by line item. Daily buckets only; amounts are in whole dollars, unlike Anthropic's cents. |
-| `POST cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` | Gemini per-model quota remaining and reset time. Body must be an empty object. |
-| `POST cloudcode-pa.googleapis.com/v1internal:loadCodeAssist` | Gemini tier name. Best-effort — some accounts have no eligible tier. |
 
 ## Credits and license
 

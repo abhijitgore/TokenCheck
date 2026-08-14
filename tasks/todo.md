@@ -435,3 +435,55 @@ individual notice; `limits`/`local`/`whoami` unaffected. Gate 1 verified against
 a synthetic `claude_team` config — notice on every command, exit 0, correct
 `--json` shape (`{"skipped": "organization-account", ...}`), and the override
 env var runs the tool normally.
+
+## Round 7 — drop Gemini, default to every provider, surface `--provider` (2026-08-13)
+
+Three requests, all from one observation: a bare `tokencheck` reported only
+Claude, and `--help` gave no hint that other providers existed.
+
+- [x] Remove Gemini support entirely
+- [x] Default `limits`/`whoami` to `--provider all`
+- [x] Make `--provider` visible in `tokencheck --help`
+
+### Decisions worth recording
+
+**Gemini was removed, not deprecated.** Its live response had started carrying
+*"This client is no longer supported for Gemini Code Assist for individuals …
+migrate to the Antigravity suite"*. Google retired the private
+`cloudcode-pa.googleapis.com` client the Gemini CLI used, and the platform
+publishes no token-count or cost API to fall back on — there was no smaller
+version of the feature left to keep. The README says so and points at
+`git log -- src/tokencheck/gemini_api.py`, so the work is recoverable.
+
+**`--provider` is declared twice, on purpose.** Once on the top-level parser so
+`--help` lists it, once per subparser with `default=argparse.SUPPRESS` so
+`tokencheck limits -p openai` still reads naturally. The suppressed default is
+what stops an absent subcommand flag from overwriting one given earlier —
+`tokencheck -p openai limits` and `tokencheck limits -p openai` are now the same
+command. This is the same trick already used for `--json`/`--no-color`.
+
+**The default is `None`, not `"all"`.** Defaulting the flag to `"all"` would
+have made "the user asked for everything" indistinguishable from "the user asked
+for nothing", and `usage` needs that difference: it defaults to `claude` while
+`limits`/`whoami` default to `all`. `_provider(args, default)` resolves it per
+command.
+
+**`usage` deliberately does not follow the new default.** It is an admin-key
+report against one organization, with different money and different scopes per
+provider; there is nothing sensible to merge across two. An explicit `-p all`
+is rejected with a one-line message and exit 1 rather than guessed at.
+
+**`_get_json` lost its `method`/`data` parameters.** Gemini's endpoints were the
+only POSTs in the tool. With them gone the helper does what its name says again.
+
+### Review
+
+119 tests pass (120 before, minus 9 Gemini-specific, plus 8 new for provider
+selection). The expiry-reporting tests used `GeminiCredential` as a convenient
+carrier of an expiry timestamp; they now use `CodexCredential`, which has the
+same contract, so the coverage did not shrink with the provider.
+
+Live-verified on the real account: bare `tokencheck` renders Claude *and*
+ChatGPT/Codex; `-p openai` works before and after the subcommand; `usage`
+still prints the individual-account notice and exits 0; `usage -p all` exits 1
+with the rejection; `setup` now counts 2 of 2 required credentials.

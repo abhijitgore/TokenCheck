@@ -88,11 +88,9 @@ def _get_json(
     *,
     label: str,
     auth_hint: str = OAUTH_REAUTH_HINT,
-    method: str = "GET",
-    data: bytes | None = None,
 ) -> Any:
-    """Fetch and decode JSON. `method`/`data` cover the POST-only Gemini endpoints."""
-    request = urllib.request.Request(url, headers=headers, method=method, data=data)
+    """Fetch and decode JSON."""
+    request = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urllib.request.urlopen(request, timeout=_TIMEOUT) as response:
             body = response.read()

@@ -455,68 +455,6 @@ def find_openai_admin_key(explicit: str | None = None) -> str:
 
 
 # --------------------------------------------------------------------------
-# Gemini — the OAuth credential the Gemini CLI writes
-# --------------------------------------------------------------------------
-
-GEMINI_HOME_ENV = "GEMINI_CONFIG_DIR"
-
-
-@dataclass(frozen=True)
-class GeminiCredential:
-    access_token: str
-    source: str
-    expires_at: float | None = None
-
-    @property
-    def is_expired(self) -> bool:
-        return self.expires_at is not None and self.expires_at <= time.time()
-
-    @property
-    def expires_in_seconds(self) -> float | None:
-        return None if self.expires_at is None else self.expires_at - time.time()
-
-
-def gemini_config_dir() -> Path:
-    raw = os.environ.get(GEMINI_HOME_ENV, "").strip()
-    return Path(raw).expanduser() if raw else Path.home() / ".gemini"
-
-
-def gemini_credential_file() -> Path:
-    return gemini_config_dir() / "oauth_creds.json"
-
-
-def _read_gemini_credential() -> GeminiCredential | None:
-    path = gemini_credential_file()
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-
-    token = payload.get("access_token")
-    if not isinstance(token, str) or not token.strip():
-        return None
-
-    # `expiry_date` is milliseconds since epoch, and may carry a fractional part.
-    raw_expiry = payload.get("expiry_date")
-    expires_at = float(raw_expiry) / 1000.0 if isinstance(raw_expiry, (int, float)) else None
-
-    return GeminiCredential(access_token=token.strip(), source=str(path), expires_at=expires_at)
-
-
-def find_gemini_credential() -> GeminiCredential:
-    credential = _read_gemini_credential()
-    if credential is not None:
-        return credential
-    raise AuthError(
-        "No Gemini credential found.\n"
-        f"  Searched: {gemini_credential_file()}\n"
-        "  Sign in with the Gemini CLI (`gemini`) or Antigravity to create it."
-    )
-
-
-# --------------------------------------------------------------------------
 # Inventory
 # --------------------------------------------------------------------------
 
@@ -653,13 +591,6 @@ def describe_sources(
             "valid": openai_valid,
             "detail": openai_detail,
         }
-    )
-
-    gemini = _read_gemini_credential()
-    rows.append(
-        _credential_row(
-            "gemini", str(gemini_credential_file()), gemini, "run `gemini` (tokens last ~1 hour)"
-        )
     )
 
     return rows
