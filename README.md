@@ -1,5 +1,7 @@
 # TokenCheck
 
+![TokenCheck](docs/social-preview.png)
+
 A zero-dependency CLI that captures **every channel of telemetry Claude emits** —
 subscription limits, local token consumption, plan and quota tier, and the
 OpenTelemetry stream Claude Code exports — and explains each figure alongside it.
