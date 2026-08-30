@@ -101,8 +101,8 @@ def project_name(path: Path) -> str:
     """Recover a readable project name from the slugified directory name.
 
     Claude Code slugifies the cwd by replacing separators with ``-``, so
-    ``-Users-abhijitgore-Projects-TokenCheck`` is the best we can do without the
-    row's own ``cwd`` field — which :func:`collect_usage` prefers when present.
+    ``-Users-alice-Projects-Demo`` is the best we can do without the row's own
+    ``cwd`` field — which :func:`collect_usage` prefers when present.
     """
     slug = _project_dir(path).name
     return slug.lstrip("-").split("-")[-1] or slug
